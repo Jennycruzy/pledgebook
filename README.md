@@ -64,4 +64,6 @@ or Yoruba recognition; it extracts names and amounts from mixed English speech.
 
 See [Phase 0 evidence](docs/progress/phase-0.md),
 [API verification](docs/api-verification.md), and
-[the grouped spec decisions](docs/spec-clarifications.txt).
+[the grouped spec decisions](docs/spec-clarifications.txt). Current limits are
+listed in [LIMITATIONS.md](LIMITATIONS.md), and evaluation stays empty until
+the real Phase 9 benchmark is run.
