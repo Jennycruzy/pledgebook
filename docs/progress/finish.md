@@ -139,6 +139,21 @@ reason=Audio contains only this guest's rechecked name and amount.
 The same helper refused the full multi-pledge clip with:
 `Audio is not shown because the amount was not a single clear phrase.`
 
+Public deployed check on a temporary demo event used the same real human WAV:
+
+```text
+Confirmed pledge: Chief Emeka Okonkwo — ₦250,000
+Paystack Test Mode link: initialized successfully (temporary reference was deleted from the local event record)
+Private page: HTTP 200
+Here's the moment you pledged: present
+Safe audio endpoint: HTTP 200, audio/wav, 175,692 bytes, 5.489 seconds, 16 kHz mono
+```
+
+The page also showed the verbatim words and the warning that no real money
+moves. The temporary event, payment row and audio were removed after the
+check. A successful card payment and signed webhook are deliberately not
+claimed here.
+
 ## Stages 4–5 — screen and judge path
 
 Status: **implemented; a stranger's timed walk-through is still required.**
