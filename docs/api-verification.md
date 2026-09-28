@@ -2,7 +2,7 @@
 
 **Checked:** 2026-09-27 (Africa/Lagos) against current public documentation.  
 **Phase:** 0 — documentation and live account checks.  
-**Status:** Sync, Realtime, and Voice Agent checks succeeded on Jenny's real recording. Gateway is optional and disabled for this account. Paystack is not configured. Phase 0 evidence is ready for independent review.  
+**Status:** Sync, Realtime, Voice Agent, and Paystack Test Mode checks succeeded on Jenny's real recording or account. Gateway is optional and disabled for this account. A successful Paystack test-card payment and public webhook remain outstanding. Phase 0 evidence is ready for independent review.
 **Credentials:** `ASSEMBLYAI_API_KEY` is present in the local, Git-ignored `pledgebook/.env` file. Its value is not recorded here. No API key was printed.
 
 ## Sync API — selected confirming pass
@@ -60,7 +60,28 @@ An authenticated, minimal structured-output request to `gemini-3.8-flash` return
 
 ## Paystack test mode
 
-Official docs confirm server-side `POST https://api.paystack.co/transaction/initialize` with required `email` and `amount`, the amount in the currency's smallest unit (kobo for NGN), an `authorization_url` and `reference` in the response, and `GET /transaction/verify/:reference`. The webhook signature is `x-paystack-signature`, HMAC-SHA512 over the raw request body with the secret key. Test and live modes are separate. Paystack's published successful test card is `4084 0840 8408 4081`, CVV `408`, with an expiry date in the future. No Jenny-owned Paystack account, test key, transaction, or webhook has been accessed.
+Official docs confirm server-side `POST https://api.paystack.co/transaction/initialize` with required `email` and `amount`, the amount in the currency's smallest unit (kobo for NGN), an `authorization_url` and `reference` in the response, and `GET /transaction/verify/:reference`. The webhook signature is `x-paystack-signature`, HMAC-SHA512 over the raw request body with the secret key. Test and live modes are separate. Paystack's published successful test card is `4084 0840 8408 4081`, CVV `408`, with an expiry date in the future. Jenny created a Paystack Test Mode account on 2026-09-28 and saved its `sk_test_...` key locally; the key itself is not recorded here.
+
+### Live Paystack check — 2026-09-28 Africa/Lagos
+
+The key was checked without printing it: the local value has the `sk_test_`
+prefix, and `.env` permissions are `600`. A real server-side initialization
+request returned:
+
+```text
+POST https://api.paystack.co/transaction/initialize → HTTP 200
+status: true
+message: Authorization URL created
+reference present: true
+authorization URL host: checkout.paystack.com
+```
+
+The Pledgebook call tool then created another real Test Mode checkout after an
+identity confirmation, stored the reference and link, and called Paystack's
+verify endpoint before payment. Paystack returned `abandoned` for that
+unfinished checkout, so the pledge stayed `confirmed`. An unsigned local
+webhook request returned HTTP 401. A successful card payment and a signed
+webhook from a public HTTPS deployment remain to be recorded.
 
 ## Hackathon submission facts
 
@@ -86,7 +107,7 @@ This is only a planning calculation from published rates and the spec's assumed 
 
 ## Account checks still needed for Phase 0
 
-Realtime, Sync, and Voice Agent checks were run; see the dated continuations below. Paystack remains untested because Jenny does not have a test account yet. To finish the later payment phase without exposing secrets:
+Realtime, Sync, Voice Agent, and Paystack Test Mode checks were run; see the dated continuations below. A successful Paystack card and public webhook still need a deployed HTTPS run. To continue without exposing secrets:
 
 1. Jenny later creates a Paystack test account and enters its test secret locally when the payment phase begins. No payment path is enabled before then.
 2. The optional Gateway integration stays disabled. The tested Gemini models were denied; Qwen was reachable but rejected the requested JSON-schema format. Rules and human review handle hard sentences.
@@ -165,4 +186,4 @@ Private evidence and source SHA-256 are recorded under `eval/private/phase-0/` a
 
 Jenny approved generated speech for the clearly disclosed automated assistant only. The builder ran the Voice Agent probe on the same real human excerpt, using a `session.update` with the documented `anna` voice and one JSON-schema tool. Token creation returned HTTP 200. The session produced `session.ready`, assistant audio, user transcript, a `tool.call`, the matching `tool.result`, final assistant transcript, and `session.ended`. Evidence: `eval/private/phase-0/20260928T000213440991Z-voice.json` (Git-ignored).
 
-The assistant transcript heard `Chief Emeka Okonkwo, ₦250,000. Make una clap for him.` The tool argument was `Emeka Okonkwo`, omitting the title. This is a real observed limitation; the product must preserve the transcript and apply its own guest matching before any financial record. The verification tool created no pledge or payment. Paystack remains unavailable until Jenny creates a separate test account.
+The assistant transcript heard `Chief Emeka Okonkwo, ₦250,000. Make una clap for him.` The tool argument was `Emeka Okonkwo`, omitting the title. This is a real observed limitation; the product must preserve the transcript and apply its own guest matching before any financial record. The verification tool created no pledge or payment. Paystack Test Mode is now configured separately; the payment tool uses it only after identity confirmation.

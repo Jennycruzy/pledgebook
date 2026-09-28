@@ -9,13 +9,19 @@ async function api(url, options = {}) { const headers = {'Content-Type':'applica
 
 function render() {
   if (!state.event) return;
-  const {event, pledges, guests, totals} = state.event;
+  const {event, pledges, guests, totals, payments = {}} = state.event;
   $('event-title').textContent = event.name;
   $('event-label').textContent = `${event.organisation} · ${event.event_date}`;
   $('total').textContent = money(totals.pledged);
   $('target-label').textContent = event.target_minor ? `Target ${money(event.target_minor)}` : 'No target set';
   $('progress-bar').style.width = `${event.target_minor ? Math.min(100, totals.pledged / event.target_minor * 100) : 0}%`;
   $('guest-count').textContent = `${guests.length} guests loaded`;
+  if ($('demo-banner')) $('demo-banner').textContent = payments.configured
+    ? 'Private demo. All names and amounts are invented. Your recording is sent to AssemblyAI. Payments use Paystack Test Mode only; no real money moves.'
+    : 'Private demo. All names and amounts are invented. Your recording is sent to AssemblyAI. Payment links are unavailable until Paystack Test Mode is configured.';
+  if ($('payment-note')) $('payment-note').textContent = payments.configured
+    ? 'The assistant may speak with a clearly disclosed generated voice. It creates a Paystack Test Mode link only after identity is confirmed.'
+    : 'The assistant may speak with a clearly disclosed generated voice. Payment links are unavailable until Paystack Test Mode is configured.';
   const keyTerms = state.event.key_terms || {included_count:0, overflow_count:0, characters:0, term_limit:100, character_limit:8000};
   $('keyterms-preview').innerHTML = `<strong>${keyTerms.included_count} names are being listened for</strong><br><span class="muted">${keyTerms.characters}/${keyTerms.character_limit} name characters used.</span>${keyTerms.overflow_count ? `<br><span class="muted">${keyTerms.overflow_count} names are beyond the verified limit and are shown here so they are never hidden.</span>` : ''}`;
   $('pledge-feed').innerHTML = pledges.length ? pledges.slice(0, 12).map(pledgeRow).join('') : '<div class="empty-list">No pledges yet. Press the microphone and read the script.</div>';
@@ -29,8 +35,15 @@ function render() {
     const guestName = p.matched_name || p.heard_name || 'Name unclear';
     const allowed = guest && guest.consent_to_contact;
     const lastCall = (state.event.calls || []).find((call) => call.pledge_id === p.id);
+    const payment = (payments.records || []).find((item) => item.pledge_id === p.id);
+    const paymentLink = payment?.payment_link || lastCall?.payment_link;
     const callSummary = lastCall ? ` · Last call: ${esc(lastCall.outcome)}${lastCall.promised_date ? ` (${esc(lastCall.promised_date)})` : ''}` : '';
-    return `<div class="pledge-row"><div><strong>${esc(guestName)}</strong><div class="pledge-sub">${esc(labelFor(p.state))} · ${guest && guest.consent_to_contact ? 'Follow-up agreed' : 'No follow-up consent recorded'}${callSummary}</div></div><div>${p.item ? esc(p.item) : money(p.amount, p.currency)} ${allowed ? `<button class="quiet" data-call-pledge="${p.id}">Call about this</button>` : ''}</div></div>`;
+    const paymentAction = payment?.status === 'success'
+      ? '<span class="state redeemed">Redeemed</span>'
+      : paymentLink
+        ? `<a class="button-link" target="_blank" rel="noreferrer" href="${esc(paymentLink)}">Open payment link</a><button class="quiet" data-verify-payment="${p.id}">Check payment</button>`
+        : '';
+    return `<div class="pledge-row"><div><strong>${esc(guestName)}</strong><div class="pledge-sub">${esc(labelFor(p.state))} · ${guest && guest.consent_to_contact ? 'Follow-up agreed' : 'No follow-up consent recorded'}${callSummary}</div></div><div>${p.item ? esc(p.item) : money(p.amount, p.currency)} ${allowed ? `<button class="quiet" data-call-pledge="${p.id}">Call about this</button>` : ''}${paymentAction ? `<div class="payment-actions">${paymentAction}</div>` : ''}</div></div>`;
   }).join('') : '<div class="empty-list">A confirmed pledge will appear here.</div>';
   const newest = pledges[0];
   if (newest) { $('newest').classList.remove('empty'); $('newest').innerHTML = `${esc(newest.matched_name || newest.heard_name || 'Name unclear')} <span class="pledge-amount">${newest.item ? esc(newest.item) : money(newest.amount, newest.currency)}</span>`; $('new-state').textContent = labelFor(newest.state); $('new-state').className = `state ${newest.state}`; }
@@ -66,6 +79,16 @@ function cleanupMic() { if (state.worklet) state.worklet.disconnect(); if (state
 function randomCallId() { if (crypto.randomUUID) return crypto.randomUUID(); return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 function base64FromBuffer(buffer) { const bytes = new Uint8Array(buffer); let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(binary); }
 function setVoiceStatus(message) { $('voice-status').textContent = message; }
+function showPaymentResult(result) {
+  const box = $('payment-result');
+  if (!box) return;
+  box.hidden = false;
+  if (result?.payment_link) {
+    box.innerHTML = `<strong>Payment link ready.</strong><br><a class="button-link" target="_blank" rel="noreferrer" href="${esc(result.payment_link)}">Open Paystack test checkout</a> <button class="quiet" data-verify-payment="${state.selectedPledge?.id || ''}">Check payment</button><br><span class="muted">Use Paystack's published test card details on the checkout page. No real money moves.</span>`;
+  } else if (result?.error) {
+    box.innerHTML = `<strong>Payment link not created.</strong><br>${esc(result.error)}`;
+  }
+}
 function playVoiceAudio(encoded) {
   if (!encoded) return;
   if (!state.voicePlayback) state.voicePlayback = new AudioContext();
@@ -94,7 +117,9 @@ async function flushVoiceTools() {
     let result;
     try { result = await api(`/api/events/${state.event.event.id}/pledges/${state.selectedPledge.id}/call/tool`, {method:'POST', body:JSON.stringify({browser_call_id:state.voiceCallId, tool:call.name, arguments:call.arguments || {}})}); }
     catch (error) { result = {ok:false, error:error.message}; }
+    if (call.name === 'send_payment_link') showPaymentResult(result);
     state.voiceSocket.send(JSON.stringify({type:'tool.result', call_id:call.call_id, result:JSON.stringify(result), is_error:result.ok === false}));
+    if (result.payment_link) await refresh();
   }
 }
 async function startVoiceInput() {
@@ -143,5 +168,43 @@ async function uploadAudio() {
 
 async function addGuest(event) { event.preventDefault(); try { const form = new FormData(event.target); state.event = await api(`/api/events/${state.event.event.id}/guests`, {method:'POST', body: JSON.stringify({title:form.get('title'), name:form.get('name'), phone:form.get('phone'), email:form.get('email'), consent_to_contact:form.get('consent') === 'on'})}).then(refresh).then(() => state.event); event.target.reset(); } catch (error) { showError(error.message); } }
 async function importGuests() { const file = $('guest-csv').files[0]; if (!file) return; $('import-status').textContent = 'Importing…'; try { const form = new FormData(); form.append('file', file, file.name); await api(`/api/events/${state.event.event.id}/guests/import`, {method:'POST', body:form}); $('import-status').textContent = 'Guest list imported.'; await refresh(); } catch (error) { $('import-status').textContent = 'Import stopped.'; showError(error.message); } finally { $('guest-csv').value = ''; } }
-document.addEventListener('click', async (event) => { const callButton = event.target.closest('[data-call-pledge]'); if (callButton) { state.selectedPledge = state.event.pledges.find((pledge) => pledge.id === Number(callButton.dataset.callPledge)); $('start-call').disabled = !state.selectedPledge; setView('follow-up'); $('voice-title').textContent = state.selectedPledge ? `Ready to call ${state.selectedPledge.matched_name || state.selectedPledge.heard_name}` : 'No call started'; return; } const guestButton = event.target.closest('[data-review]'); if (guestButton) { try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${guestButton.dataset.review}/resolve`, {method:'POST', body:JSON.stringify({action:'guest', guest_id:Number(guestButton.dataset.guest)})}); render(); } catch (error) { showError(error.message); } } const amountButton = event.target.closest('[data-amount]'); if (amountButton) { const amount = Number(prompt('What amount did the recording clearly say?')); if (!Number.isInteger(amount) || amount < 0) return; try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${amountButton.dataset.amount}/resolve`, {method:'POST', body:JSON.stringify({action:'amount', amount})}); render(); } catch (error) { showError(error.message); } } const reject = event.target.closest('[data-reject]'); if (reject) { const reason = prompt('Why is this not a pledge?'); if (!reason) return; try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${reject.dataset.reject}/resolve`, {method:'POST',body:JSON.stringify({action:'reject',reason})}); render(); } catch (error) { showError(error.message); } } });
+document.addEventListener('click', async (event) => {
+  const verifyButton = event.target.closest('[data-verify-payment]');
+  if (verifyButton && verifyButton.dataset.verifyPayment) {
+    try {
+      const result = await api(`/api/events/${state.event.event.id}/pledges/${verifyButton.dataset.verifyPayment}/payment/verify`, {method:'POST'});
+      state.event = result.state;
+      render();
+      if (result.verification?.status && result.verification.status !== 'success') showPaymentResult({error:`Paystack reports this payment as ${result.verification.status}.`});
+    } catch (error) { showError(error.message); }
+    return;
+  }
+  const callButton = event.target.closest('[data-call-pledge]');
+  if (callButton) {
+    state.selectedPledge = state.event.pledges.find((pledge) => pledge.id === Number(callButton.dataset.callPledge));
+    $('start-call').disabled = !state.selectedPledge;
+    setView('follow-up');
+    $('voice-title').textContent = state.selectedPledge ? `Ready to call ${state.selectedPledge.matched_name || state.selectedPledge.heard_name}` : 'No call started';
+    return;
+  }
+  const guestButton = event.target.closest('[data-review]');
+  if (guestButton) {
+    try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${guestButton.dataset.review}/resolve`, {method:'POST', body:JSON.stringify({action:'guest', guest_id:Number(guestButton.dataset.guest)})}); render(); }
+    catch (error) { showError(error.message); }
+  }
+  const amountButton = event.target.closest('[data-amount]');
+  if (amountButton) {
+    const amount = Number(prompt('What amount did the recording clearly say?'));
+    if (!Number.isInteger(amount) || amount < 0) return;
+    try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${amountButton.dataset.amount}/resolve`, {method:'POST', body:JSON.stringify({action:'amount', amount})}); render(); }
+      catch (error) { showError(error.message); }
+  }
+  const reject = event.target.closest('[data-reject]');
+  if (reject) {
+    const reason = prompt('Why is this not a pledge?');
+    if (!reason) return;
+    try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${reject.dataset.reject}/resolve`, {method:'POST',body:JSON.stringify({action:'reject',reason})}); render(); }
+      catch (error) { showError(error.message); }
+  }
+});
 document.querySelector('#event-form').addEventListener('submit', createEvent); document.querySelector('#start-event').addEventListener('click', startEvent); document.querySelector('#mic').addEventListener('click', startMic); document.querySelector('#upload-audio').addEventListener('click', () => document.querySelector('#audio-upload').click()); document.querySelector('#audio-upload').addEventListener('change', uploadAudio); document.querySelector('#guest-form').addEventListener('submit', addGuest); document.querySelector('#import-guests').addEventListener('click', importGuests); document.querySelector('#start-call').addEventListener('click', () => { if (state.selectedPledge) startVoiceCall(state.selectedPledge.id); }); document.querySelector('#end-call').addEventListener('click', () => endVoiceSession(true)); document.querySelector('#reset').addEventListener('click', () => { cleanupMic(); endVoiceSession(false); location.reload(); }); document.querySelectorAll('.tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));

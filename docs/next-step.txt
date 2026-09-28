@@ -19,9 +19,10 @@ AT THE PHASE 0 HARD STOP
 
 The Phase 0 owner decisions are recorded:
 
-1. Paystack test mode is not available yet. Payment work stays disabled until
-   Jenny creates the separate Paystack account and saves its test secret in the
-   local `.env` file.
+1. Jenny created a separate Paystack account and saved its Test Secret Key in
+   the local `.env` file. The server now initializes and verifies Test Mode
+   checkouts. A successful card run and public signed webhook still need to be
+   demonstrated after deployment.
 2. Generated speech is allowed for the clearly disclosed automated assistant
    only. All MC and benchmark recordings remain real human recordings.
 

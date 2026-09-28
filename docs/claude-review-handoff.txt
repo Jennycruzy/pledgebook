@@ -65,3 +65,11 @@ review. A follow-up assistant slice is also implemented with real short-lived
 Voice Agent tokens and server-side call/tool audit records; payment remains
 disabled. Review files are docs/progress/phase-1-3.md and
 docs/progress/phase-8.md. Neither phase is reviewer-passed or Jenny-approved.
+
+OWNER UPDATE 2026-09-28
+Jenny has now created a Paystack Test Mode account and saved the `sk_test_...`
+key locally. The payment slice initializes a real test checkout, stores its
+reference, verifies before redemption, and rejects unsigned webhooks. The
+historical owner notes above describe the earlier state and are superseded for
+payment availability; successful card and public HTTPS webhook evidence still
+need to be recorded.

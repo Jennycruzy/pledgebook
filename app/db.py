@@ -42,6 +42,22 @@ CREATE TABLE IF NOT EXISTS calls (
   id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL, pledge_id INTEGER,
   outcome TEXT NOT NULL, details_json TEXT NOT NULL, created_at TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS payments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  event_id TEXT NOT NULL REFERENCES events(id),
+  pledge_id INTEGER NOT NULL REFERENCES pledges(id),
+  reference TEXT NOT NULL UNIQUE,
+  amount_kobo INTEGER NOT NULL,
+  email TEXT NOT NULL,
+  authorization_url TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'initialized',
+  paystack_status TEXT NOT NULL DEFAULT '',
+  payload_json TEXT NOT NULL DEFAULT '{}',
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS payments_event ON payments(event_id);
+CREATE INDEX IF NOT EXISTS payments_pledge ON payments(pledge_id);
 """
 
 

@@ -12,7 +12,7 @@ import sys
 import uuid
 import wave
 
-from fastapi import FastAPI, File, HTTPException, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
@@ -21,6 +21,7 @@ from .config import Settings
 from .db import Database, now
 from .extractor import TurnWindow, extract_turn
 from .names import match_name
+from .payments import PaystackError, initialize_transaction, valid_webhook_signature, verify_transaction
 from .services import AssemblyAIError, open_realtime, paced_pcm16, sync_transcribe, voice_token
 
 
@@ -121,6 +122,27 @@ def serialise_pledge(row: dict) -> dict:
     return result
 
 
+def serialise_payment(row: dict) -> dict:
+    return {
+        "id": row["id"],
+        "pledge_id": row["pledge_id"],
+        "reference": row["reference"],
+        "amount_kobo": row["amount_kobo"],
+        "email": row["email"],
+        "payment_link": row["authorization_url"],
+        "status": row["status"],
+        "paystack_status": row["paystack_status"],
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+def event_payments(event_id: str) -> list[dict]:
+    return [serialise_payment(row) for row in database.all(
+        "SELECT * FROM payments WHERE event_id = ? ORDER BY id DESC", (event_id,)
+    )]
+
+
 def event_calls(event_id: str) -> list[dict]:
     result = []
     for row in database.all("SELECT * FROM calls WHERE event_id = ? ORDER BY id DESC", (event_id,)):
@@ -130,6 +152,8 @@ def event_calls(event_id: str) -> list[dict]:
             details = {}
         result.append({"id": row["id"], "pledge_id": row["pledge_id"], "outcome": row["outcome"],
                        "promised_date": details.get("promised_date"), "dispute": details.get("dispute"),
+                       "payment_link": details.get("payment_link"),
+                       "payment_reference": details.get("payment_reference"),
                        "created_at": row["created_at"]})
     return result
 
@@ -149,7 +173,8 @@ def event_state(event_id: str) -> dict:
                    "flags": sum(p["state"] == "flagged" for p in pledges),
                    "in_kind": sum(1 for p in pledges if p["item"])},
         "payments": {"configured": bool(settings.paystack_secret_key),
-                      "message": "Paystack test mode is not configured yet." if not settings.paystack_secret_key else "Paystack test mode is configured."},
+                      "message": "Paystack test mode is not configured yet." if not settings.paystack_secret_key else "Paystack test mode is configured.",
+                      "records": event_payments(event_id)},
     }
 
 
@@ -682,6 +707,108 @@ def call_row(event_id: str, pledge_id: int, browser_call_id: str) -> dict:
     raise HTTPException(404, "This follow-up call was not found")
 
 
+def latest_payment(event_id: str, pledge_id: int) -> dict | None:
+    return database.one(
+        "SELECT * FROM payments WHERE event_id = ? AND pledge_id = ? ORDER BY id DESC LIMIT 1",
+        (event_id, pledge_id),
+    )
+
+
+def payment_snapshot(data: dict) -> dict:
+    """Keep only the Paystack fields needed for an audit trail."""
+
+    return {
+        "reference": data.get("reference"),
+        "status": data.get("status"),
+        "amount": data.get("amount"),
+        "currency": data.get("currency"),
+        "gateway_response": data.get("gateway_response"),
+        "paid_at": data.get("paid_at"),
+    }
+
+
+async def verify_and_redeem_payment(payment: dict) -> dict:
+    """Verify a Paystack transaction and redeem its pledge once only."""
+
+    result = await verify_transaction(settings, payment["reference"])
+    data = result["data"]
+    status = str(data.get("status") or "").lower()
+    snapshot = payment_snapshot(data)
+    if data.get("reference") != payment["reference"]:
+        raise PaystackError("Paystack returned a different payment reference.")
+    if int(data.get("amount") or 0) != int(payment["amount_kobo"]):
+        raise PaystackError("Paystack returned a different payment amount.")
+    if str(data.get("currency") or "NGN").upper() != "NGN":
+        raise PaystackError("Paystack returned a non-naira payment.")
+    if status != "success":
+        database.execute(
+            "UPDATE payments SET status = ?, paystack_status = ?, payload_json = ?, updated_at = ? WHERE id = ?",
+            ("pending", status, json.dumps(snapshot, ensure_ascii=False), now(), payment["id"]),
+        )
+        return {"redeemed": False, "status": status, "data": snapshot}
+
+    database.execute(
+        "UPDATE payments SET status = 'success', paystack_status = ?, payload_json = ?, updated_at = ? WHERE id = ?",
+        (status, json.dumps(snapshot, ensure_ascii=False), now(), payment["id"]),
+    )
+    pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (payment["pledge_id"], payment["event_id"]))
+    if not pledge:
+        raise PaystackError("The payment is not linked to a pledge in this event.")
+    if pledge["state"] != "redeemed":
+        database.execute(
+            "UPDATE pledges SET state = 'redeemed', reason = '', updated_at = ? WHERE id = ? AND state != 'redeemed'",
+            (now(), pledge["id"]),
+        )
+        database.audit(payment["event_id"], "payment_redeemed", {"reference": payment["reference"], "amount_kobo": payment["amount_kobo"]}, pledge["id"])
+    return {"redeemed": True, "status": status, "data": snapshot}
+
+
+async def create_payment_link(event_id: str, pledge: dict, call: dict, guest: dict) -> dict:
+    """Create or reuse a test checkout for a confirmed naira pledge."""
+
+    if pledge.get("item"):
+        return {"ok": False, "error": "This is an in-kind gift, so no payment link was created."}
+    if pledge.get("currency") not in (None, "NGN"):
+        return {"ok": False, "error": "Only naira pledges can use this Paystack test link."}
+    amount_naira = int(pledge.get("amount_minor") or 0)
+    if amount_naira <= 0:
+        return {"ok": False, "error": "This pledge has no clear naira amount, so no payment link was created."}
+    email = str(guest.get("email") or "").strip()
+    if not email:
+        return {"ok": False, "error": "This guest has no email address. Add one before sending a payment link."}
+
+    existing = latest_payment(event_id, pledge["id"])
+    if existing and existing["status"] in {"initialized", "pending", "success"}:
+        return {
+            "ok": True,
+            "payment_link": existing["authorization_url"],
+            "reference": existing["reference"],
+            "payment_status": existing["status"],
+            "reused": True,
+        }
+
+    reference = f"pb-{event_id[:12]}-{pledge['id']}-{uuid.uuid4().hex[:10]}"
+    try:
+        created = await initialize_transaction(
+            settings,
+            amount_naira=amount_naira,
+            email=email,
+            reference=reference,
+            metadata={"event_id": event_id, "pledge_id": pledge["id"], "call_id": call["id"], "product": "pledgebook"},
+        )
+    except PaystackError as exc:
+        database.audit(event_id, "payment_link_failed", {"error": str(exc)}, pledge["id"])
+        return {"ok": False, "error": str(exc)}
+    data = created["data"]
+    created_at = now()
+    database.execute(
+        "INSERT INTO payments(event_id, pledge_id, reference, amount_kobo, email, authorization_url, status, paystack_status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'initialized', '', ?, ?, ?)",
+        (event_id, pledge["id"], data["reference"], created["amount_kobo"], email, data["authorization_url"], json.dumps({"message": created["body"].get("message")}, ensure_ascii=False), created_at, created_at),
+    )
+    database.audit(event_id, "payment_link_created", {"reference": data["reference"], "amount_kobo": created["amount_kobo"], "email": email}, pledge["id"])
+    return {"ok": True, "payment_link": data["authorization_url"], "reference": data["reference"], "payment_status": "initialized", "reused": False}
+
+
 @app.post("/api/events/{event_id}/pledges/{pledge_id}/call/start")
 async def start_follow_up_call(event_id: str, pledge_id: int, payload: VoiceCallStart):
     event = event_or_404(event_id)
@@ -727,7 +854,18 @@ async def follow_up_tool(event_id: str, pledge_id: int, payload: VoiceToolReques
         if not settings.paystack_secret_key:
             database.audit(event_id, "payment_link_unavailable", {"reason": "Paystack test mode is not configured"}, pledge_id)
             return {"ok": False, "error": "Paystack test mode is not configured, so no payment link was created."}
-        raise HTTPException(503, "Paystack transaction initialization is awaiting live verification; no payment link was created.")
+        pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
+        guest = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ?", (pledge.get("guest_id") if pledge else -1, event_id))
+        if not pledge or not guest:
+            return {"ok": False, "error": "This pledge no longer has a confirmed guest."}
+        result = await create_payment_link(event_id, pledge, call, guest)
+        if result.get("ok"):
+            details["payment_link"] = result.get("payment_link")
+            details["payment_reference"] = result.get("reference")
+            details["payment_status"] = result.get("payment_status")
+            database.execute("UPDATE calls SET details_json = ? WHERE id = ?", (json.dumps(details), call["id"]))
+            await hub.publish(event_id, {"type": "payment", "pledge_id": pledge_id, "payment": result, "state": event_state(event_id)})
+        return result
 
     if tool == "record_promise":
         if not details.get("identity_confirmed"):
@@ -762,6 +900,60 @@ async def follow_up_tool(event_id: str, pledge_id: int, payload: VoiceToolReques
         return {"ok": True, "message": "The call outcome was recorded."}
 
     return {"ok": False, "error": "That follow-up action is not available."}
+
+
+@app.post("/api/paystack/webhook")
+async def paystack_webhook(request: Request):
+    """Accept Paystack events only after validating their raw-body signature."""
+
+    raw_body = await request.body()
+    signature = request.headers.get("x-paystack-signature")
+    if not valid_webhook_signature(settings.paystack_secret_key, raw_body, signature):
+        raise HTTPException(401, "The payment notification signature could not be verified.")
+    try:
+        payload = json.loads(raw_body.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise HTTPException(400, "The payment notification was not valid JSON.") from exc
+    if not isinstance(payload, dict):
+        raise HTTPException(400, "The payment notification was not an object.")
+    if payload.get("event") != "charge.success":
+        return {"ok": True, "ignored": True}
+    data = payload.get("data") or {}
+    reference = str(data.get("reference") or "").strip()
+    payment = database.one("SELECT * FROM payments WHERE reference = ?", (reference,))
+    if not payment:
+        # A webhook can arrive before a local record is available after a
+        # restart. Acknowledge unknown references without inventing a pledge.
+        return {"ok": True, "ignored": True}
+    if payment["status"] == "success":
+        return {"ok": True, "duplicate": True, "reference": reference}
+    try:
+        result = await verify_and_redeem_payment(payment)
+    except PaystackError as exc:
+        database.audit(payment["event_id"], "payment_verification_failed", {"reference": reference, "error": str(exc)}, payment["pledge_id"])
+        raise HTTPException(503, str(exc)) from exc
+    await hub.publish(payment["event_id"], {"type": "payment", "pledge_id": payment["pledge_id"], "payment": {"reference": reference, **result}, "state": event_state(payment["event_id"])})
+    return {"ok": True, "reference": reference, **result}
+
+
+@app.post("/api/events/{event_id}/pledges/{pledge_id}/payment/verify")
+async def verify_pledge_payment(event_id: str, pledge_id: int):
+    """Manually verify the current checkout after a test payment completes."""
+
+    event_or_404(event_id)
+    payment = latest_payment(event_id, pledge_id)
+    if not payment:
+        raise HTTPException(404, "No payment link exists for this pledge.")
+    if payment["status"] == "success":
+        return {"ok": True, "duplicate": True, "payment": serialise_payment(payment), "state": event_state(event_id)}
+    try:
+        result = await verify_and_redeem_payment(payment)
+    except PaystackError as exc:
+        database.audit(event_id, "payment_verification_failed", {"reference": payment["reference"], "error": str(exc)}, pledge_id)
+        raise HTTPException(502, str(exc)) from exc
+    await hub.publish(event_id, {"type": "payment", "pledge_id": pledge_id, "payment": {"reference": payment["reference"], **result}, "state": event_state(event_id)})
+    refreshed = database.one("SELECT * FROM payments WHERE id = ?", (payment["id"],))
+    return {"ok": True, "payment": serialise_payment(refreshed), "verification": result, "state": event_state(event_id)}
 
 
 @app.get("/api/events/{event_id}/export.csv")

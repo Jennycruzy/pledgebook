@@ -16,7 +16,8 @@ are working. Deployment and the independent review are still outstanding.
   streamed through the same Realtime and Sync path as the microphone.
 - Pledge states: provisional, confirmed, corrected, flagged, and rejected.
 - Usher actions for choosing a guest or rejecting a line with a reason.
-- Payment status explicitly reports Paystack as unavailable.
+- Payment status now reports Paystack Test Mode configuration and exposes the
+  server-side checkout state without exposing the secret key.
 
 ## Commands and actual output
 

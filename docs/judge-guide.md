@@ -14,6 +14,11 @@ local slice:
    export.
 7. Add a guest with follow-up consent, open **Follow-up**, and start the
    clearly disclosed assistant. A wrong-person answer never shares the amount.
+8. For a payment demonstration, add the guest's email, answer the identity
+   question as the right person, open the Paystack Test Mode link, and use the
+   published test card `4084 0840 8408 4081` with any future expiry and CVV
+   `408`. Return to Pledgebook and press **Check payment**. A successful
+   verification changes the pledge to **Redeemed**.
 
-The payment action states that Paystack is unavailable. There is no fake test
-payment and no synthetic MC or donor recording.
+The payment link is a real Paystack Test Mode checkout. No real money moves,
+and there is no synthetic MC or donor recording.

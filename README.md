@@ -7,13 +7,14 @@ screen, rechecks the exact audio moment with AssemblyAI Sync, and leaves an
 audit trail for every correction or question. A human usher resolves anything
 unclear. The current build has real AssemblyAI Realtime and Sync capture,
 SQLite records, guest lists, audio evidence, the big screen, the usher queue,
-and CSV export.
+CSV export, a server-side Paystack Test Mode checkout, and a verified payment
+state path.
 
 This is a new build for the AssemblyAI Voice Agent Hackathon. Demo names and
 amounts are invented. Human test recordings are real. The disclosed automated
 assistant may use an AssemblyAI generated voice under Jenny's decision on
-2026-09-28. Paystack is not configured yet, so no payment is claimed and no
-money can move through this build.
+2026-09-28. Paystack Test Mode is configured locally. No live payment key is
+used and no real money can move through this build.
 
 ## Run it locally
 
@@ -51,16 +52,20 @@ local microphone testing.
 - The register exports CSV and shows the recorded history.
 - The follow-up screen can open a real AssemblyAI Voice Agent session for a
   guest who gave contact consent. It checks identity first and records the
-  structured call outcome. With no Paystack account, the payment tool reports
-  that no link was created.
+  structured call outcome. After identity confirmation, the server creates a
+  Paystack Test Mode checkout, stores its reference, and shows the link.
+- A Paystack webhook is accepted only with the signed raw request body. Before
+  a pledge becomes Redeemed, the server verifies the reference, amount, and
+  currency with Paystack. Duplicate success notifications do not count twice.
 
 ## What is deliberately unavailable
 
-Paystack test mode has not been set up on the owner's account. The payment
-screen is therefore disabled rather than simulated. AssemblyAI's optional LLM
-Gateway was not available for the tested account models, so hard sentences go
-to rules and a human review. Pledgebook does not promise Nigerian Pidgin, Igbo,
-or Yoruba recognition; it extracts names and amounts from mixed English speech.
+The Paystack checkout has been verified in Test Mode, but a successful card
+payment and a public HTTPS webhook still need to be demonstrated after
+deployment. AssemblyAI's optional LLM Gateway was not available for the tested
+account models, so hard sentences go to rules and a human review. Pledgebook
+does not promise Nigerian Pidgin, Igbo, or Yoruba recognition; it extracts names
+and amounts from mixed English speech.
 
 See [Phase 0 evidence](docs/progress/phase-0.md),
 [API verification](docs/api-verification.md), and

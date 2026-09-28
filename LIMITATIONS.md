@@ -2,8 +2,10 @@
 
 This is an honest build status, not a list of claims.
 
-- Paystack is not configured because the owner does not have a test account.
-  No payment link or redeemed state is simulated.
+- Paystack Test Mode is configured locally and checkout initialization plus
+  pre-payment verification have been measured. A successful test-card payment,
+  signed webhook from a public HTTPS deployment, and redeemed-state evidence
+  are still outstanding.
 - The optional AssemblyAI LLM Gateway is disabled because the tested account
   models did not provide the required structured response.
 - The active Realtime session starts with its guest names. A guest added during

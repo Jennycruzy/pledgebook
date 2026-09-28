@@ -354,4 +354,12 @@ Phase 0 review findings:
 - Voice Agent token, generated assistant speech, structured tool call, tool result, and clean teardown are evidenced in the private voice response file.
 - The Gateway remains optional and disabled. The tested Gemini models were denied; Qwen was reachable but rejected the requested JSON-schema format. No Pledgebook feature depends on it.
 - Paystack is explicitly unavailable until Jenny creates that separate account. The app must say payments are not configured and must not pretend to redeem pledges.
+
+## Owner update — 2026-09-28 Africa/Lagos
+
+Jenny has now created the separate Paystack Test Mode account and saved its
+`sk_test_...` key locally. The payment integration was enabled after this
+owner decision. A real initialization call returned an authorization URL and
+reference; an unfinished checkout verified as `abandoned` and stayed
+unredeemed. The historical notes above describe the state before this update.
 - The builder is proceeding with Phase 1–3 implementation while this report remains ready for independent review. The builder does not mark the review as passed.
