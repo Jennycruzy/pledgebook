@@ -121,6 +121,19 @@ def serialise_pledge(row: dict) -> dict:
     return result
 
 
+def event_calls(event_id: str) -> list[dict]:
+    result = []
+    for row in database.all("SELECT * FROM calls WHERE event_id = ? ORDER BY id DESC", (event_id,)):
+        try:
+            details = json.loads(row["details_json"])
+        except (TypeError, json.JSONDecodeError):
+            details = {}
+        result.append({"id": row["id"], "pledge_id": row["pledge_id"], "outcome": row["outcome"],
+                       "promised_date": details.get("promised_date"), "dispute": details.get("dispute"),
+                       "created_at": row["created_at"]})
+    return result
+
+
 def event_state(event_id: str) -> dict:
     event = event_or_404(event_id)
     guests = guests_for(event_id)
@@ -131,7 +144,7 @@ def event_state(event_id: str) -> dict:
     received = sum((p["amount"] or 0) for p in pledges if p["state"] == "redeemed" and p["currency"] in (None, "NGN"))
     return {
         "event": event, "guests": guests, "pledges": pledges,
-        "key_terms": keyterm_preview(event_id),
+        "key_terms": keyterm_preview(event_id), "calls": event_calls(event_id),
         "totals": {"pledged": pledged, "confirmed": confirmed, "received": received,
                    "flags": sum(p["state"] == "flagged" for p in pledges),
                    "in_kind": sum(1 for p in pledges if p["item"])},

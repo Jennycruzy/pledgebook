@@ -28,7 +28,9 @@ function render() {
     const guest = guests.find((g) => g.id === p.guest_id);
     const guestName = p.matched_name || p.heard_name || 'Name unclear';
     const allowed = guest && guest.consent_to_contact;
-    return `<div class="pledge-row"><div><strong>${esc(guestName)}</strong><div class="pledge-sub">${esc(labelFor(p.state))} · ${guest && guest.consent_to_contact ? 'Follow-up agreed' : 'No follow-up consent recorded'}</div></div><div>${p.item ? esc(p.item) : money(p.amount, p.currency)} ${allowed ? `<button class="quiet" data-call-pledge="${p.id}">Call about this</button>` : ''}</div></div>`;
+    const lastCall = (state.event.calls || []).find((call) => call.pledge_id === p.id);
+    const callSummary = lastCall ? ` · Last call: ${esc(lastCall.outcome)}${lastCall.promised_date ? ` (${esc(lastCall.promised_date)})` : ''}` : '';
+    return `<div class="pledge-row"><div><strong>${esc(guestName)}</strong><div class="pledge-sub">${esc(labelFor(p.state))} · ${guest && guest.consent_to_contact ? 'Follow-up agreed' : 'No follow-up consent recorded'}${callSummary}</div></div><div>${p.item ? esc(p.item) : money(p.amount, p.currency)} ${allowed ? `<button class="quiet" data-call-pledge="${p.id}">Call about this</button>` : ''}</div></div>`;
   }).join('') : '<div class="empty-list">A confirmed pledge will appear here.</div>';
   const newest = pledges[0];
   if (newest) { $('newest').classList.remove('empty'); $('newest').innerHTML = `${esc(newest.matched_name || newest.heard_name || 'Name unclear')} <span class="pledge-amount">${newest.item ? esc(newest.item) : money(newest.amount, newest.currency)}</span>`; $('new-state').textContent = labelFor(newest.state); $('new-state').className = `state ${newest.state}`; }
