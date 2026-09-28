@@ -15,7 +15,8 @@ CREATE TABLE IF NOT EXISTS events (
   id TEXT PRIMARY KEY, name TEXT NOT NULL, organisation TEXT NOT NULL,
   event_date TEXT NOT NULL, target_minor INTEGER NOT NULL DEFAULT 0,
   min_minor INTEGER NOT NULL DEFAULT 0, max_minor INTEGER NOT NULL DEFAULT 0,
-  demo INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'setup', created_at TEXT NOT NULL
+  demo INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL DEFAULT 'setup', created_at TEXT NOT NULL,
+  expires_at TEXT, demo_audio_seconds INTEGER NOT NULL DEFAULT 0
 );
 CREATE TABLE IF NOT EXISTS guests (
   id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES events(id),
@@ -30,6 +31,8 @@ CREATE TABLE IF NOT EXISTS pledges (
   matched_name TEXT NOT NULL DEFAULT '', amount_minor INTEGER, currency TEXT,
   item TEXT, live_text TEXT NOT NULL DEFAULT '', recheck_text TEXT NOT NULL DEFAULT '',
   source_start_ms INTEGER, source_end_ms INTEGER, audio_path TEXT,
+  safe_audio_path TEXT, safe_audio_reason TEXT NOT NULL DEFAULT '',
+  recognised_from_pledge_id INTEGER, recognised_at TEXT,
   state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
@@ -50,6 +53,8 @@ CREATE TABLE IF NOT EXISTS payments (
   amount_kobo INTEGER NOT NULL,
   email TEXT NOT NULL,
   authorization_url TEXT NOT NULL,
+  public_token TEXT UNIQUE,
+  expires_at TEXT,
   status TEXT NOT NULL DEFAULT 'initialized',
   paystack_status TEXT NOT NULL DEFAULT '',
   payload_json TEXT NOT NULL DEFAULT '{}',
@@ -67,6 +72,39 @@ class Database:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         with self.connect() as conn:
             conn.executescript(SCHEMA)
+            self._ensure_columns(conn)
+
+    @staticmethod
+    def _ensure_columns(conn: sqlite3.Connection) -> None:
+        """Apply additive schema changes without deleting existing event data."""
+
+        required = {
+            "events": {
+                "expires_at": "TEXT",
+                "demo_audio_seconds": "INTEGER NOT NULL DEFAULT 0",
+            },
+            "guests": {
+                "learned_from_pledge_id": "INTEGER",
+                "learned_at": "TEXT",
+            },
+            "pledges": {
+                "safe_audio_path": "TEXT",
+                "safe_audio_reason": "TEXT NOT NULL DEFAULT ''",
+                "recognised_from_pledge_id": "INTEGER",
+                "recognised_at": "TEXT",
+            },
+            "payments": {
+                "public_token": "TEXT",
+                "expires_at": "TEXT",
+            },
+        }
+        for table, columns in required.items():
+            present = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+            for column, definition in columns.items():
+                if column not in present:
+                    conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        conn.execute("CREATE INDEX IF NOT EXISTS payments_public_token ON payments(public_token)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS payments_public_token_unique ON payments(public_token) WHERE public_token IS NOT NULL")
 
     @contextmanager
     def connect(self) -> Iterator[sqlite3.Connection]:

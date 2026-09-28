@@ -1,8 +1,9 @@
-const state = { event: null, media: null, audio: null, worklet: null, socket: null, source: null, stream: null, selectedPledge: null, voiceSocket: null, voiceAudio: null, voiceWorklet: null, voiceSource: null, voiceStream: null, voicePlayback: null, voiceNextTime: 0, voicePendingTools: [], voiceCallId: null };
+const state = { event: null, media: null, audio: null, worklet: null, socket: null, source: null, stream: null, selectedPledge: null, voiceSocket: null, voiceAudio: null, voiceWorklet: null, voiceSource: null, voiceStream: null, voicePlayback: null, voiceNextTime: 0, voicePendingTools: [], voiceCallId: null, selfGuestId: Number(localStorage.getItem('pledgebook_self_guest_id') || 0), usherOnly: new URLSearchParams(location.search).get('view') === 'usher' };
 const $ = (id) => document.getElementById(id);
 document.querySelector('input[name="event_date"]').value = new Date().toISOString().slice(0, 10);
 const money = (value, currency = 'NGN') => currency === 'NGN' || !currency ? `₦${Number(value || 0).toLocaleString('en-NG')}` : `${currency} ${Number(value || 0).toLocaleString()}`;
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
+const shortTime = (value) => value ? new Date(value).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
 function showError(message) { $('error').textContent = message; $('error').hidden = false; }
 function clearError() { $('error').hidden = true; }
 async function api(url, options = {}) { const headers = {'Content-Type':'application/json', ...(options.headers || {})}; if (options.body instanceof FormData) delete headers['Content-Type']; const response = await fetch(url, {...options, headers}); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.detail || body.error || `Request failed (${response.status})`); return body; }
@@ -13,8 +14,11 @@ function render() {
   $('event-title').textContent = event.name;
   $('event-label').textContent = `${event.organisation} · ${event.event_date}`;
   $('total').textContent = money(totals.pledged);
+  $('received-total').textContent = money(totals.received);
   $('target-label').textContent = event.target_minor ? `Target ${money(event.target_minor)}` : 'No target set';
   $('progress-bar').style.width = `${event.target_minor ? Math.min(100, totals.pledged / event.target_minor * 100) : 0}%`;
+  const limits = state.event.limits || {};
+  $('limits-label').textContent = event.demo ? `Private demo limits: ${limits.audio_seconds_used || 0}/${limits.audio_seconds_limit || 180} seconds · ${limits.calls_used || 0}/${limits.calls_limit || 2} calls · deleted after 24 hours.` : '';
   $('guest-count').textContent = `${guests.length} guests loaded`;
   if ($('demo-banner')) $('demo-banner').textContent = payments.configured
     ? 'Private demo. All names and amounts are invented. Your recording is sent to AssemblyAI. Payments use Paystack Test Mode only; no real money moves.'
@@ -24,10 +28,16 @@ function render() {
     : 'The assistant may speak with a clearly disclosed generated voice. Payment links are unavailable until Paystack Test Mode is configured.';
   const keyTerms = state.event.key_terms || {included_count:0, overflow_count:0, characters:0, term_limit:100, character_limit:8000};
   $('keyterms-preview').innerHTML = `<strong>${keyTerms.included_count} names are being listened for</strong><br><span class="muted">${keyTerms.characters}/${keyTerms.character_limit} name characters used.</span>${keyTerms.overflow_count ? `<br><span class="muted">${keyTerms.overflow_count} names are beyond the verified limit and are shown here so they are never hidden.</span>` : ''}`;
+  const selfGuest = guests.find((g) => g.id === state.selfGuestId) || (guests.length === 1 ? guests[0] : null);
+  $('self-script-line').textContent = selfGuest ? `${[selfGuest.title, selfGuest.name].filter(Boolean).join(' ')} — one hundred thousand naira!` : 'Add yourself in Guest list to put your name here.';
   $('pledge-feed').innerHTML = pledges.length ? pledges.slice(0, 12).map(pledgeRow).join('') : '<div class="empty-list">No pledges yet. Press the microphone and read the script.</div>';
   $('register-list').innerHTML = pledges.length ? pledges.map(pledgeRow).join('') : '<div class="empty-list">The register will fill as pledges are heard.</div>';
   const flags = pledges.filter((p) => p.state === 'flagged');
   $('review-list').innerHTML = flags.length ? flags.map(reviewRow).join('') : '<div class="empty-list">Nothing needs checking right now.</div>';
+  const usherUrl = `${location.origin}${location.pathname}?event=${encodeURIComponent(event.id)}&view=usher`;
+  $('usher-link').href = usherUrl;
+  $('usher-qr').src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(usherUrl)}`;
+  $('usher-share').hidden = state.usherOnly;
   $('guest-list-items').innerHTML = guests.map((g) => `<div class="guest-row"><span><strong>${esc([g.title,g.name].filter(Boolean).join(' '))}</strong>${g.group_name ? `<small class="muted"> · ${esc(g.group_name)}</small>` : ''}</span><span class="muted">${g.consent_to_contact ? 'Follow-up agreed' : 'No follow-up yet'}</span></div>`).join('');
   const followUps = pledges.filter((p) => ['confirmed','corrected','redeemed'].includes(p.state));
   $('follow-up-list').innerHTML = followUps.length ? followUps.map((p) => {
@@ -41,20 +51,20 @@ function render() {
     const paymentAction = payment?.status === 'success'
       ? '<span class="state redeemed">Redeemed</span>'
       : paymentLink
-        ? `<a class="button-link" target="_blank" rel="noreferrer" href="${esc(paymentLink)}">Open payment link</a><button class="quiet" data-verify-payment="${p.id}">Check payment</button>`
+        ? `${payment?.payment_page ? `<a class="button-link" target="_blank" rel="noreferrer" href="${esc(payment.payment_page)}">Open pledge page</a>` : ''}<a class="button-link" target="_blank" rel="noreferrer" href="${esc(paymentLink)}">Paystack checkout</a><button class="quiet" data-verify-payment="${p.id}">Check payment</button>`
         : '';
     return `<div class="pledge-row"><div><strong>${esc(guestName)}</strong><div class="pledge-sub">${esc(labelFor(p.state))} · ${guest && guest.consent_to_contact ? 'Follow-up agreed' : 'No follow-up consent recorded'}${callSummary}</div></div><div>${p.item ? esc(p.item) : money(p.amount, p.currency)} ${allowed ? `<button class="quiet" data-call-pledge="${p.id}">Call about this</button>` : ''}${paymentAction ? `<div class="payment-actions">${paymentAction}</div>` : ''}</div></div>`;
   }).join('') : '<div class="empty-list">A confirmed pledge will appear here.</div>';
   const newest = pledges[0];
-  if (newest) { $('newest').classList.remove('empty'); $('newest').innerHTML = `${esc(newest.matched_name || newest.heard_name || 'Name unclear')} <span class="pledge-amount">${newest.item ? esc(newest.item) : money(newest.amount, newest.currency)}</span>`; $('new-state').textContent = labelFor(newest.state); $('new-state').className = `state ${newest.state}`; }
+  if (newest) { $('newest').classList.remove('empty'); $('newest').innerHTML = `${esc(newest.matched_name || newest.heard_name || 'Name unclear')} <span class="pledge-amount">${newest.item ? esc(newest.item) : money(newest.amount, newest.currency)}</span>${newest.recognised_from_pledge_id ? '<small class="recognised">Recognised from a correction</small>' : ''}`; $('new-state').textContent = labelFor(newest.state); $('new-state').className = `state ${newest.state}`; }
   $('export').href = `/api/events/${event.id}/export.csv`;
 }
 function labelFor(state) { return ({provisional:'Provisional',confirmed:'Confirmed',corrected:'Rechecked — changed',flagged:'Needs checking',rejected:'Rejected',redeemed:'Redeemed'}[state] || state); }
-function pledgeRow(p) { return `<div class="pledge-row"><div class="pledge-main"><div class="pledge-name">${esc(p.matched_name || p.heard_name || 'Name unclear')}</div><div class="pledge-sub">Heard: ${esc(p.live_text || '—')}${p.recheck_text ? ` · Rechecked: ${esc(p.recheck_text)}` : ''}${p.reason ? ` · ${esc(p.reason)}` : ''}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div><div class="pledge-amount">${p.item ? esc(p.item) : money(p.amount,p.currency)}</div><span class="state ${p.state}">${labelFor(p.state)}</span></div></div>`; }
+function pledgeRow(p) { const payment = (state.event.payments?.records || []).find((item) => item.pledge_id === p.id); const paid = payment?.status === 'success' ? ` · paid ${shortTime(payment.paid_at || payment.updated_at)}` : ''; const spoken = p.created_at ? `Spoken ${shortTime(p.created_at)}` : ''; return `<div class="pledge-row"><div class="pledge-main"><div class="pledge-name">${esc(p.matched_name || p.heard_name || 'Name unclear')}</div><div class="pledge-sub">${spoken}${paid} · Heard: ${esc(p.live_text || '—')}${p.recheck_text ? ` · Rechecked: ${esc(p.recheck_text)}` : ''}${p.reason ? ` · ${esc(p.reason)}` : ''}${p.recognised_from_pledge_id ? ' · Recognised from a correction' : ''}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div><div class="pledge-amount">${p.item ? esc(p.item) : money(p.amount,p.currency)}</div><span class="state ${p.state}">${labelFor(p.state)}</span></div></div>`; }
 function reviewRow(p) { const guests = state.event.guests.slice(0, 8); return `<div class="review-row"><div><strong>${esc(p.heard_name || 'Name unclear')} · ${p.item ? esc(p.item) : money(p.amount,p.currency)}</strong><div class="pledge-sub">${esc(p.reason || 'Please listen to the audio moment and choose what you heard.')}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div class="review-actions">${guests.map(g => `<button data-review="${p.id}" data-guest="${g.id}">This is ${esc([g.title,g.name].filter(Boolean).join(' '))}</button>`).join('')}<button data-amount="${p.id}">Fix amount</button><button data-reject="${p.id}">Not a pledge</button></div></div>`; }
 async function refresh() { state.event = await api(`/api/events/${state.event.event.id}`); render(); }
 
-async function createEvent(event) { event.preventDefault(); clearError(); try { const form = new FormData(event.target); state.event = await api('/api/events', {method:'POST', body: JSON.stringify({name:form.get('name'), organisation:form.get('organisation'), event_date:form.get('event_date'), target:Number(form.get('target') || 0), minimum:Number(form.get('minimum') || 0), maximum:Number(form.get('maximum') || 0), demo:true})}); $('setup').hidden = true; $('dashboard').hidden = false; render(); connectSSE(); } catch (error) { showError(error.message); } }
+async function createEvent(event) { event.preventDefault(); clearError(); try { const form = new FormData(event.target); state.event = await api('/api/events', {method:'POST', body: JSON.stringify({name:form.get('name'), organisation:form.get('organisation'), event_date:form.get('event_date'), target:Number(form.get('target') || 0), minimum:Number(form.get('minimum') || 0), maximum:Number(form.get('maximum') || 0), demo:true})}); localStorage.removeItem('pledgebook_self_guest_id'); $('setup').hidden = true; $('dashboard').hidden = false; render(); connectSSE(); } catch (error) { showError(error.message); } }
 async function startEvent() { try { state.event = await api(`/api/events/${state.event.event.id}/start`, {method:'POST'}); render(); } catch (error) { showError(error.message); } }
 function connectSSE() { const source = new EventSource(`/api/events/${state.event.event.id}/stream`); source.onmessage = async (message) => { try { const payload = JSON.parse(message.data); if (payload.type === 'realtime' && payload.event?.transcript) { $('live-text').textContent = payload.event.transcript; $('live-status').textContent = payload.event.end_of_turn ? 'Turn heard' : 'Listening'; } if (payload.type === 'error') showError(payload.message); } catch (error) { showError('A live update could not be read; the register will refresh.'); } await refresh(); }; source.onerror = () => { $('connection').textContent = 'Updates reconnecting…'; }; }
 function setView(view) { document.querySelectorAll('.view').forEach((node) => node.hidden = node.id !== view); document.querySelectorAll('.tab').forEach((node) => node.classList.toggle('active', node.dataset.view === view)); }
@@ -84,7 +94,7 @@ function showPaymentResult(result) {
   if (!box) return;
   box.hidden = false;
   if (result?.payment_link) {
-    box.innerHTML = `<strong>Payment link ready.</strong><br><a class="button-link" target="_blank" rel="noreferrer" href="${esc(result.payment_link)}">Open Paystack test checkout</a> <button class="quiet" data-verify-payment="${state.selectedPledge?.id || ''}">Check payment</button><br><span class="muted">Use Paystack's published test card details on the checkout page. No real money moves.</span>`;
+    box.innerHTML = `<strong>Payment link ready.</strong><br>${result.payment_page ? `<a class="button-link" target="_blank" rel="noreferrer" href="${esc(result.payment_page)}">Open pledge page</a> ` : ''}<a class="button-link" target="_blank" rel="noreferrer" href="${esc(result.payment_link)}">Open Paystack test checkout</a> <button class="quiet" data-verify-payment="${state.selectedPledge?.id || ''}">Check payment</button><br><span class="muted">The pledge page shows the safe audio moment when available. Use Paystack's published test card details. No real money moves.</span>`;
   } else if (result?.error) {
     box.innerHTML = `<strong>Payment link not created.</strong><br>${esc(result.error)}`;
   }
@@ -166,7 +176,24 @@ async function uploadAudio() {
   }
 }
 
-async function addGuest(event) { event.preventDefault(); try { const form = new FormData(event.target); state.event = await api(`/api/events/${state.event.event.id}/guests`, {method:'POST', body: JSON.stringify({title:form.get('title'), name:form.get('name'), phone:form.get('phone'), email:form.get('email'), consent_to_contact:form.get('consent') === 'on'})}).then(refresh).then(() => state.event); event.target.reset(); } catch (error) { showError(error.message); } }
+async function playSampleRecording() {
+  clearError();
+  $('sample-audio').disabled = true;
+  $('upload-status').textContent = 'Sending the owner-approved human recording…';
+  try {
+    const response = await fetch('/api/sample-recording');
+    if (!response.ok) throw new Error('The sample recording is not configured on this server. Use your microphone or upload the WAV you recorded.');
+    const blob = await response.blob();
+    const form = new FormData();
+    form.append('file', blob, 'pledgebook-demo.wav');
+    const result = await api(`/api/events/${state.event.event.id}/upload`, {method:'POST', body:form});
+    $('upload-status').textContent = result.message;
+    await refresh();
+  } catch (error) { $('upload-status').textContent = 'Sample stopped.'; showError(error.message); }
+  finally { $('sample-audio').disabled = false; }
+}
+
+async function addGuest(event) { event.preventDefault(); try { const form = new FormData(event.target); const guest = await api(`/api/events/${state.event.event.id}/guests`, {method:'POST', body: JSON.stringify({title:form.get('title'), name:form.get('name'), phone:form.get('phone'), email:form.get('email'), consent_to_contact:form.get('consent') === 'on'})}); if (state.event.event.demo) { state.selfGuestId = guest.id; localStorage.setItem('pledgebook_self_guest_id', String(guest.id)); } event.target.reset(); await refresh(); setView('big-screen'); } catch (error) { showError(error.message); } }
 async function importGuests() { const file = $('guest-csv').files[0]; if (!file) return; $('import-status').textContent = 'Importing…'; try { const form = new FormData(); form.append('file', file, file.name); await api(`/api/events/${state.event.event.id}/guests/import`, {method:'POST', body:form}); $('import-status').textContent = 'Guest list imported.'; await refresh(); } catch (error) { $('import-status').textContent = 'Import stopped.'; showError(error.message); } finally { $('guest-csv').value = ''; } }
 document.addEventListener('click', async (event) => {
   const verifyButton = event.target.closest('[data-verify-payment]');
@@ -207,4 +234,18 @@ document.addEventListener('click', async (event) => {
       catch (error) { showError(error.message); }
   }
 });
-document.querySelector('#event-form').addEventListener('submit', createEvent); document.querySelector('#start-event').addEventListener('click', startEvent); document.querySelector('#mic').addEventListener('click', startMic); document.querySelector('#upload-audio').addEventListener('click', () => document.querySelector('#audio-upload').click()); document.querySelector('#audio-upload').addEventListener('change', uploadAudio); document.querySelector('#guest-form').addEventListener('submit', addGuest); document.querySelector('#import-guests').addEventListener('click', importGuests); document.querySelector('#start-call').addEventListener('click', () => { if (state.selectedPledge) startVoiceCall(state.selectedPledge.id); }); document.querySelector('#end-call').addEventListener('click', () => endVoiceSession(true)); document.querySelector('#reset').addEventListener('click', () => { cleanupMic(); endVoiceSession(false); location.reload(); }); document.querySelectorAll('.tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+document.querySelector('#event-form').addEventListener('submit', createEvent); document.querySelector('#start-event').addEventListener('click', startEvent); document.querySelector('#mic').addEventListener('click', startMic); document.querySelector('#upload-audio').addEventListener('click', () => document.querySelector('#audio-upload').click()); document.querySelector('#sample-audio').addEventListener('click', playSampleRecording); document.querySelector('#audio-upload').addEventListener('change', uploadAudio); document.querySelector('#guest-form').addEventListener('submit', addGuest); document.querySelector('#import-guests').addEventListener('click', importGuests); document.querySelector('#start-call').addEventListener('click', () => { if (state.selectedPledge) startVoiceCall(state.selectedPledge.id); }); document.querySelector('#end-call').addEventListener('click', () => endVoiceSession(true)); document.querySelector('#reset').addEventListener('click', () => { cleanupMic(); endVoiceSession(false); localStorage.removeItem('pledgebook_self_guest_id'); location.href = location.pathname; }); document.querySelectorAll('.tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+
+async function bootSharedEvent() {
+  const eventId = new URLSearchParams(location.search).get('event');
+  if (!eventId) return;
+  try {
+    state.event = await api(`/api/events/${encodeURIComponent(eventId)}`);
+    $('setup').hidden = true;
+    $('dashboard').hidden = false;
+    render();
+    connectSSE();
+    if (state.usherOnly) setView('review');
+  } catch (error) { showError(error.message); }
+}
+void bootSharedEvent();

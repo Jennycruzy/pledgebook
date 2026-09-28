@@ -1,0 +1,21 @@
+[Unit]
+Description=Pledgebook fundraising speech register
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+WorkingDirectory=/home/ubuntu/pledgebook
+Environment=HOME=/home/ubuntu
+ExecStart=/home/ubuntu/pledgebook/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8400
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/home/ubuntu/pledgebook/data
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

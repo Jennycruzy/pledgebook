@@ -3,17 +3,20 @@ from __future__ import annotations
 import asyncio
 from array import array
 import csv
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
+import html
 import io
 import json
 from pathlib import Path
 import re
+import secrets
+import shutil
 import sys
 import uuid
 import wave
 
 from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
 
 from .amounts import parse_amount
@@ -29,6 +32,15 @@ ROOT = Path(__file__).resolve().parents[1]
 settings = Settings.load()
 database = Database(settings.data_dir / "pledgebook.sqlite3")
 app = FastAPI(title="Pledgebook", version="0.1.0")
+
+DEMO_AUDIO_LIMIT_SECONDS = 180
+DEMO_CALL_LIMIT = 2
+DEMO_DAILY_LIMIT = 25
+DEMO_RETENTION_HOURS = 24
+
+# One event can have one or more capture tabs. Each connection has a lock so
+# an usher's listening-list update cannot interleave with an audio frame.
+live_sessions: dict[str, dict[object, asyncio.Lock]] = {}
 
 
 class EventCreate(BaseModel):
@@ -105,7 +117,36 @@ def invented_guests() -> list[dict]:
             for title, name in names]
 
 
+def parse_time(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
+
+
+def purge_expired_demo_events() -> int:
+    """Delete demo rows and audio after the advertised 24-hour retention."""
+
+    cutoff = datetime.now(timezone.utc)
+    expired = []
+    for event in database.all("SELECT id, expires_at FROM events WHERE demo = 1"):
+        expiry = parse_time(event.get("expires_at"))
+        if expiry and expiry <= cutoff:
+            expired.append(event["id"])
+    for event_id in expired:
+        for table in ("payments", "calls", "audit_log", "pledges", "guests"):
+            database.execute(f"DELETE FROM {table} WHERE event_id = ?", (event_id,))
+        database.execute("DELETE FROM events WHERE id = ?", (event_id,))
+        shutil.rmtree(settings.data_dir / "audio" / event_id, ignore_errors=True)
+        shutil.rmtree(settings.data_dir / "uploads" / event_id, ignore_errors=True)
+    return len(expired)
+
+
 def event_or_404(event_id: str) -> dict:
+    purge_expired_demo_events()
     event = database.one("SELECT * FROM events WHERE id = ?", (event_id,))
     if not event:
         raise HTTPException(404, "Event was not found")
@@ -123,6 +164,14 @@ def serialise_pledge(row: dict) -> dict:
 
 
 def serialise_payment(row: dict) -> dict:
+    try:
+        payload = json.loads(row.get("payload_json") or "{}")
+    except (TypeError, json.JSONDecodeError):
+        payload = {}
+    token = row.get("public_token")
+    payment_page = f"/pay/{token}" if token else None
+    if token and settings.public_url:
+        payment_page = f"{settings.public_url}/pay/{token}"
     return {
         "id": row["id"],
         "pledge_id": row["pledge_id"],
@@ -130,8 +179,11 @@ def serialise_payment(row: dict) -> dict:
         "amount_kobo": row["amount_kobo"],
         "email": row["email"],
         "payment_link": row["authorization_url"],
+        "payment_page": payment_page,
         "status": row["status"],
         "paystack_status": row["paystack_status"],
+        "paid_at": payload.get("paid_at"),
+        "expires_at": row.get("expires_at"),
         "created_at": row["created_at"],
         "updated_at": row["updated_at"],
     }
@@ -166,6 +218,7 @@ def event_state(event_id: str) -> dict:
     pledged = sum((p["amount"] or 0) for p in pledges if p["currency"] in (None, "NGN") and p["state"] not in ("rejected",))
     confirmed = sum((p["amount"] or 0) for p in pledges if p["currency"] in (None, "NGN") and p["state"] in ("confirmed", "corrected", "redeemed"))
     received = sum((p["amount"] or 0) for p in pledges if p["state"] == "redeemed" and p["currency"] in (None, "NGN"))
+    demo_expiry = parse_time(event.get("expires_at"))
     return {
         "event": event, "guests": guests, "pledges": pledges,
         "key_terms": keyterm_preview(event_id), "calls": event_calls(event_id),
@@ -175,11 +228,21 @@ def event_state(event_id: str) -> dict:
         "payments": {"configured": bool(settings.paystack_secret_key),
                       "message": "Paystack test mode is not configured yet." if not settings.paystack_secret_key else "Paystack test mode is configured.",
                       "records": event_payments(event_id)},
+        "limits": {
+            "audio_seconds_used": int(event.get("demo_audio_seconds") or 0),
+            "audio_seconds_limit": DEMO_AUDIO_LIMIT_SECONDS if event.get("demo") else None,
+            "calls_used": len(event_calls(event_id)) if event.get("demo") else None,
+            "calls_limit": DEMO_CALL_LIMIT if event.get("demo") else None,
+            "expires_at": event.get("expires_at"),
+            "retention_hours": DEMO_RETENTION_HOURS if event.get("demo") else None,
+            "expired": bool(demo_expiry and demo_expiry <= datetime.now(timezone.utc)),
+        },
     }
 
 
 @app.get("/healthz")
 async def healthz():
+    purge_expired_demo_events()
     return {"ok": True, "assemblyai_configured": bool(settings.assemblyai_api_key),
             "paystack_configured": bool(settings.paystack_secret_key), "version": app.version}
 
@@ -199,11 +262,22 @@ async def static_file(path: str):
 
 @app.post("/api/events")
 async def create_event(payload: EventCreate):
+    purge_expired_demo_events()
+    if payload.demo:
+        today_prefix = datetime.now(timezone.utc).date().isoformat()
+        created_today = database.one(
+            "SELECT COUNT(*) AS count FROM events WHERE demo = 1 AND created_at >= ?",
+            (today_prefix,),
+        )
+        if int((created_today or {}).get("count") or 0) >= DEMO_DAILY_LIMIT:
+            raise HTTPException(429, "Today's public demo limit has been reached. The sample recording remains available.")
     event_id = uuid.uuid4().hex
+    created_at = now()
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=DEMO_RETENTION_HOURS)).isoformat() if payload.demo else None
     database.execute(
-        "INSERT INTO events(id, name, organisation, event_date, target_minor, min_minor, max_minor, demo, status, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'setup', ?)",
+        "INSERT INTO events(id, name, organisation, event_date, target_minor, min_minor, max_minor, demo, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'setup', ?, ?)",
         (event_id, payload.name.strip(), payload.organisation.strip(), payload.event_date,
-         payload.target, payload.minimum, payload.maximum, int(payload.demo), now()),
+         payload.target, payload.minimum, payload.maximum, int(payload.demo), created_at, expires_at),
     )
     if payload.demo:
         for guest in invented_guests():
@@ -211,6 +285,14 @@ async def create_event(payload: EventCreate):
                              (event_id, guest["title"], guest["name"], guest["phone"], guest["email"], int(guest["consent_to_contact"]), guest["group"], now()))
     database.audit(event_id, "event_created", {"demo": payload.demo, "invented_names": payload.demo})
     return event_state(event_id)
+
+
+@app.get("/api/sample-recording")
+async def sample_recording():
+    path = settings.sample_audio_path
+    if not path or not path.is_file():
+        raise HTTPException(404, "The owner-approved sample recording is not configured.")
+    return FileResponse(path, media_type="audio/wav", filename="pledgebook-demo.wav")
 
 
 @app.get("/api/events/{event_id}")
@@ -296,6 +378,22 @@ def event_keyterms(event_id: str) -> list[str]:
     return keyterm_preview(event_id)["terms"]
 
 
+async def update_live_listening_terms(event_id: str) -> int:
+    """Apply the current guest list to every active Realtime session."""
+
+    sessions = live_sessions.get(event_id, {})
+    terms = event_keyterms(event_id)
+    updated = 0
+    for aai, lock in list(sessions.items()):
+        try:
+            async with lock:
+                await aai.send(json.dumps({"type": "UpdateConfiguration", "keyterms_prompt": terms}))
+            updated += 1
+        except Exception:
+            sessions.pop(aai, None)
+    return updated
+
+
 def save_pcm_clip(event_id: str, pledge_id: int, pcm: bytes, start_ms: int, end_ms: int) -> Path | None:
     start_byte = max(0, int(max(0, start_ms) * 16 * 2))
     end_byte = min(len(pcm), int(max(start_ms + 80, end_ms) * 16 * 2))
@@ -311,6 +409,50 @@ def save_pcm_clip(event_id: str, pledge_id: int, pcm: bytes, start_ms: int, end_
         wav.setframerate(16000)
         wav.writeframes(data)
     return path
+
+
+def make_safe_audio_clip(event_id: str, pledge_id: int, audio_path: Path, recheck, text: str, words: list[dict], guest_id: int | None) -> tuple[Path | None, str]:
+    """Trim a confirmed pledge to its recheck word span only when it is private."""
+
+    if not guest_id:
+        return None, "Audio is not shown because this pledge has no confirmed guest."
+    if not words or not audio_path.is_file():
+        return None, "Audio is not shown because word timings were not returned."
+    guests = guests_for(event_id)
+    heard_guests = []
+    normal_text = re.sub(r"[^a-z]+", "", text.lower())
+    for guest in guests:
+        name_norm = re.sub(r"[^a-z]+", "", guest.get("name", "").lower())
+        if name_norm and name_norm in normal_text:
+            heard_guests.append(guest)
+    if len(heard_guests) != 1 or int(heard_guests[0]["id"]) != int(guest_id):
+        return None, "Audio is not shown because it included another guest's name."
+    if not recheck.amount.is_clear or recheck.start_ms >= recheck.end_ms:
+        return None, "Audio is not shown because the amount was not a single clear phrase."
+    try:
+        with wave.open(str(audio_path), "rb") as source:
+            rate = source.getframerate()
+            channels = source.getnchannels()
+            width = source.getsampwidth()
+            frame_count = source.getnframes()
+            if rate != 16000 or channels != 1 or width != 2:
+                return None, "Audio is not shown because the stored clip has an unsupported format."
+            start_frame = max(0, int((recheck.start_ms - 60) * rate / 1000))
+            end_frame = min(frame_count, int((recheck.end_ms + 60) * rate / 1000))
+            if end_frame <= start_frame:
+                return None, "Audio is not shown because its word timings were empty."
+            source.setpos(start_frame)
+            frames = source.readframes(end_frame - start_frame)
+        safe_path = settings.data_dir / "audio" / event_id / f"pledge-{pledge_id}-safe.wav"
+        safe_path.parent.mkdir(parents=True, exist_ok=True)
+        with wave.open(str(safe_path), "wb") as output:
+            output.setnchannels(1)
+            output.setsampwidth(2)
+            output.setframerate(16000)
+            output.writeframes(frames)
+        return safe_path, "Audio contains only this guest's rechecked name and amount."
+    except (OSError, wave.Error) as exc:
+        return None, f"Audio is not shown because the clip could not be trimmed: {exc}"
 
 
 async def confirm_pledge(event_id: str, pledge_id: int):
@@ -347,8 +489,12 @@ async def confirm_pledge(event_id: str, pledge_id: int):
         else:
             state, reason = "confirmed", ""
         matched_name = recheck.name_match.guest_name if recheck.name_match and recheck.name_match.guest_name else pledge["matched_name"]
-        database.execute("UPDATE pledges SET guest_id = ?, recheck_text = ?, amount_minor = ?, currency = ?, matched_name = ?, state = ?, reason = ?, updated_at = ? WHERE id = ?",
-                         (current_guest, text, amount.minor if amount.minor is not None else pledge["amount_minor"], amount.currency or pledge["currency"], matched_name if current_guest else "", state, reason, now(), pledge_id))
+        safe_path = None
+        safe_reason = ""
+        if state in {"confirmed", "corrected"} and current_guest and amount.is_clear:
+            safe_path, safe_reason = make_safe_audio_clip(event_id, pledge_id, Path(pledge["audio_path"]), recheck, text, words, current_guest)
+        database.execute("UPDATE pledges SET guest_id = ?, recheck_text = ?, amount_minor = ?, currency = ?, matched_name = ?, state = ?, reason = ?, safe_audio_path = ?, safe_audio_reason = ?, updated_at = ? WHERE id = ?",
+                         (current_guest, text, amount.minor if amount.minor is not None else pledge["amount_minor"], amount.currency or pledge["currency"], matched_name if current_guest else "", state, reason, str(safe_path) if safe_path else None, safe_reason, now(), pledge_id))
         database.audit(event_id, "rechecked", {"text": text, "elapsed_ms": elapsed_ms, "state": state, "reason": reason}, pledge_id)
         await hub.publish(event_id, {"type": "pledge", "pledge": serialise_pledge(database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))), "state": event_state(event_id)})
     except Exception as exc:
@@ -380,6 +526,13 @@ async def create_live_pledge(event_id: str, live_text: str, live_words: list[dic
         state, reason = "flagged", "Amount is above this event's allowed maximum."
     start_ms = min(name_turn.start_ms, amount_turn.start_ms)
     end_ms = max(name_turn.end_ms, amount_turn.end_ms)
+    recognised_from = None
+    recognised_at = None
+    if name_match and name_match.kind == "matched" and name_match.guest_id:
+        learned_guest = database.one("SELECT learned_from_pledge_id, learned_at FROM guests WHERE id = ?", (name_match.guest_id,))
+        if learned_guest and learned_guest.get("learned_from_pledge_id"):
+            recognised_from = learned_guest["learned_from_pledge_id"]
+            recognised_at = learned_guest.get("learned_at")
 
     # Realtime can revise a final turn or repeat the same pledge while the
     # speaker is still being segmented. Treat a nearby repeat as one record;
@@ -404,9 +557,9 @@ async def create_live_pledge(event_id: str, live_text: str, live_words: list[dic
         }, recent["id"])
         database.execute(
             "UPDATE pledges SET guest_id = ?, heard_name = ?, matched_name = ?, amount_minor = ?, currency = ?, item = ?, "
-            "live_text = ?, recheck_text = '', source_start_ms = ?, source_end_ms = ?, state = ?, reason = ?, updated_at = ? WHERE id = ?",
+            "live_text = ?, recheck_text = '', source_start_ms = ?, source_end_ms = ?, state = ?, reason = ?, recognised_from_pledge_id = ?, recognised_at = ?, updated_at = ? WHERE id = ?",
             (name_match.guest_id, name_turn.name or "", name_match.guest_name or "", amount.minor, amount.currency, amount.item,
-             live_text, start_ms, end_ms, state, reason, now(), recent["id"]),
+             live_text, start_ms, end_ms, state, reason, recognised_from, recognised_at, now(), recent["id"]),
         )
         clip = save_pcm_clip(event_id, recent["id"], pcm, start_ms - 500, end_ms + 500)
         if clip:
@@ -419,9 +572,9 @@ async def create_live_pledge(event_id: str, live_text: str, live_words: list[dic
             asyncio.create_task(confirm_pledge(event_id, recent["id"]))
         return
     pledge_id = database.execute(
-        "INSERT INTO pledges(event_id, guest_id, heard_name, matched_name, amount_minor, currency, item, live_text, source_start_ms, source_end_ms, state, reason, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "INSERT INTO pledges(event_id, guest_id, heard_name, matched_name, amount_minor, currency, item, live_text, source_start_ms, source_end_ms, state, reason, recognised_from_pledge_id, recognised_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (event_id, name_match.guest_id if name_match else None, name_turn.name or "", name_match.guest_name if name_match and name_match.guest_name else "",
-         amount.minor, amount.currency, amount.item, live_text, start_ms, end_ms, state, reason, now(), now()),
+         amount.minor, amount.currency, amount.item, live_text, start_ms, end_ms, state, reason, recognised_from, recognised_at, now(), now()),
     )
     clip = save_pcm_clip(event_id, pledge_id, pcm, start_ms - 500, end_ms + 500)
     if clip:
@@ -438,7 +591,10 @@ async def create_live_pledge(event_id: str, live_text: str, live_words: list[dic
 async def process_uploaded_audio(event_id: str, audio_path: Path):
     """Run an uploaded human WAV through the same live and confirming path."""
     aai, _ = await open_realtime(settings, event_keyterms(event_id))
+    session_lock = asyncio.Lock()
+    live_sessions.setdefault(event_id, {})[aai] = session_lock
     audio = bytearray()
+    event = event_or_404(event_id)
     window = TurnWindow()
     seen: set[tuple[int, int, str]] = set()
 
@@ -465,15 +621,22 @@ async def process_uploaded_audio(event_id: str, audio_path: Path):
     reader = asyncio.create_task(read_assembly())
     try:
         async for chunk in paced_pcm16(audio_path):
+            if event.get("demo") and len(audio) / (16000 * 2) >= DEMO_AUDIO_LIMIT_SECONDS:
+                raise RuntimeError("This private demo has used its three-minute microphone limit.")
             audio.extend(chunk)
-            await aai.send(chunk)
+            async with session_lock:
+                await aai.send(chunk)
         await asyncio.sleep(2)
-        await aai.send(json.dumps({"type": "Terminate"}))
+        async with session_lock:
+            await aai.send(json.dumps({"type": "Terminate"}))
         await asyncio.wait_for(reader, 12)
     finally:
         if not reader.done():
             reader.cancel()
         await asyncio.gather(reader, return_exceptions=True)
+        if event.get("demo"):
+            database.execute("UPDATE events SET demo_audio_seconds = demo_audio_seconds + ? WHERE id = ?", (int(len(audio) / (16000 * 2)), event_id))
+        live_sessions.get(event_id, {}).pop(aai, None)
         await aai.close()
 
 
@@ -536,7 +699,7 @@ def normalise_wav(path: Path) -> None:
 
 @app.post("/api/events/{event_id}/upload")
 async def upload_audio(event_id: str, file: UploadFile = File(...)):
-    event_or_404(event_id)
+    event = event_or_404(event_id)
     if not (file.filename or "").lower().endswith(".wav"):
         raise HTTPException(415, "Upload a WAV recording")
     raw = await file.read()
@@ -546,9 +709,13 @@ async def upload_audio(event_id: str, file: UploadFile = File(...)):
     path.write_bytes(raw)
     try:
         with wave.open(str(path), "rb") as wav:
-            if wav.getnframes() / wav.getframerate() > 120:
+            duration = wav.getnframes() / wav.getframerate()
+            if duration > 120:
                 path.unlink(missing_ok=True)
                 raise HTTPException(413, "The uploaded recording is longer than the 120-second live clip limit.")
+            if event.get("demo") and int(event.get("demo_audio_seconds") or 0) + duration > DEMO_AUDIO_LIMIT_SECONDS:
+                path.unlink(missing_ok=True)
+                raise HTTPException(429, "This private demo has reached its three-minute microphone limit.")
         normalise_wav(path)
     except HTTPException:
         raise
@@ -563,7 +730,7 @@ async def upload_audio(event_id: str, file: UploadFile = File(...)):
 @app.websocket("/ws/events/{event_id}/capture")
 async def capture(event_id: str, browser: WebSocket):
     await browser.accept()
-    event_or_404(event_id)
+    event = event_or_404(event_id)
     try:
         aai, begin = await open_realtime(settings, event_keyterms(event_id))
     except Exception as exc:
@@ -571,6 +738,8 @@ async def capture(event_id: str, browser: WebSocket):
         await browser.close(code=1011)
         return
     await browser.send_json({"type": "connection", "status": "Listening", "begin": begin})
+    session_lock = asyncio.Lock()
+    live_sessions.setdefault(event_id, {})[aai] = session_lock
     audio = bytearray()
     window = TurnWindow()
     seen: set[tuple[int, int, str]] = set()
@@ -609,15 +778,22 @@ async def capture(event_id: str, browser: WebSocket):
                 break
             if message.get("bytes") is not None:
                 chunk = message["bytes"]
+                if event.get("demo") and (len(audio) + len(chunk)) / (16000 * 2) > DEMO_AUDIO_LIMIT_SECONDS:
+                    await browser.send_json({"type": "error", "message": "This private demo has reached its three-minute microphone limit."})
+                    async with session_lock:
+                        await aai.send(json.dumps({"type": "Terminate"}))
+                    break
                 audio.extend(chunk)
-                await aai.send(chunk)
+                async with session_lock:
+                    await aai.send(chunk)
             elif message.get("text"):
                 try:
                     command = json.loads(message["text"])
                 except json.JSONDecodeError:
                     command = {}
                 if command.get("type") == "stop":
-                    await aai.send(json.dumps({"type": "Terminate"}))
+                    async with session_lock:
+                        await aai.send(json.dumps({"type": "Terminate"}))
                     # Termination flushes the last unfinished amount turn. Do
                     # not cancel the reader before AssemblyAI sends that final
                     # Turn, or the pledge would vanish at the button press.
@@ -629,6 +805,9 @@ async def capture(event_id: str, browser: WebSocket):
     except WebSocketDisconnect:
         pass
     finally:
+        if event.get("demo") and audio:
+            database.execute("UPDATE events SET demo_audio_seconds = demo_audio_seconds + ? WHERE id = ?", (int(len(audio) / (16000 * 2)), event_id))
+        live_sessions.get(event_id, {}).pop(aai, None)
         if not reading_task.done():
             reading_task.cancel()
         try:
@@ -653,6 +832,63 @@ async def pledge_audio(event_id: str, pledge_id: int):
     return FileResponse(path, media_type="audio/wav")
 
 
+def payment_by_token(token: str) -> dict:
+    payment = database.one("SELECT * FROM payments WHERE public_token = ?", (token,))
+    if not payment:
+        raise HTTPException(404, "This payment page was not found.")
+    expiry = parse_time(payment.get("expires_at"))
+    if expiry and expiry <= datetime.now(timezone.utc):
+        raise HTTPException(410, "This payment page has expired. Ask the organiser for a new link.")
+    return payment
+
+
+@app.get("/pay/{token}", response_class=HTMLResponse)
+async def payment_page(token: str):
+    try:
+        payment = payment_by_token(token)
+    except HTTPException as exc:
+        return HTMLResponse(f"<h1>Pledgebook</h1><p>{html.escape(str(exc.detail))}</p>", status_code=exc.status_code)
+    event = event_or_404(payment["event_id"])
+    pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (payment["pledge_id"], payment["event_id"]))
+    if not pledge:
+        return HTMLResponse("<h1>Pledgebook</h1><p>This pledge is no longer available.</p>", status_code=404)
+    guest_name = pledge.get("matched_name") or pledge.get("heard_name") or "Guest"
+    amount = pledge.get("amount_minor") or 0
+    amount_label = f"₦{int(amount):,}" if (pledge.get("currency") in (None, "NGN")) else f"{pledge.get('currency')} {amount:,}"
+    safe_audio = pledge.get("safe_audio_path")
+    audio_available = bool(safe_audio and Path(safe_audio).is_file())
+    audio_block = (
+        f'<audio controls preload="none" src="/api/payment/{html.escape(token)}/audio"></audio>'
+        if audio_available else
+        f'<p class="muted">{html.escape(pledge.get("safe_audio_reason") or "Audio is not shown because the exact words could not be separated safely.")}</p>'
+    )
+    transcript = html.escape(pledge.get("recheck_text") or pledge.get("live_text") or "The spoken words are not available.")
+    event_name = html.escape(event.get("name") or "Fundraising event")
+    organisation = html.escape(event.get("organisation") or "The organiser")
+    guest_name_html = html.escape(guest_name)
+    amount_html = html.escape(amount_label)
+    paystack_link = html.escape(payment["authorization_url"], quote=True)
+    return HTMLResponse(f"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Pledgebook payment</title><style>body{{font:16px system-ui,sans-serif;background:#f8fafc;color:#1e293b;margin:0;padding:32px}}main{{max-width:620px;margin:auto;background:white;border:1px solid #e2e8f0;border-radius:20px;padding:28px;box-shadow:0 12px 40px #1e293b14}}h1{{margin-top:0}}.amount{{font-size:44px;font-weight:900;margin:12px 0}}audio{{width:100%;margin:12px 0}}a{{display:inline-block;background:#155eef;color:#fff;text-decoration:none;font-weight:800;padding:13px 17px;border-radius:10px}}.muted{{color:#64748b}}.notice{{background:#e8efff;padding:12px;border-radius:10px}}</style></head>
+<body><main><p class="muted">Pledgebook · Test payment only</p><h1>Thank you, {guest_name_html}</h1>
+<p>{organisation} · {event_name} · {html.escape(event.get("event_date") or "")}</p>
+<h2>Here's the moment you pledged</h2>{audio_block}<p class="muted">Words heard: {transcript}</p>
+<div class="amount">{amount_html}</div><p class="notice">This is a Paystack Test Mode checkout. No real money moves.</p>
+<p><a href="{paystack_link}" target="_blank" rel="noreferrer">Continue to Paystack test checkout</a></p>
+<p class="muted">Test card: 4084 0840 8408 4081 · expiry in the future · CVV 408</p></main></body></html>""")
+
+
+@app.get("/api/payment/{token}/audio")
+async def payment_audio(token: str):
+    payment = payment_by_token(token)
+    pledge = database.one("SELECT safe_audio_path FROM pledges WHERE id = ? AND event_id = ?", (payment["pledge_id"], payment["event_id"]))
+    path = Path((pledge or {}).get("safe_audio_path") or "").resolve()
+    if not pledge or not path.is_file() or settings.data_dir.resolve() not in path.parents:
+        raise HTTPException(404, "The safe pledge moment is not available.")
+    return FileResponse(path, media_type="audio/wav")
+
+
 @app.post("/api/events/{event_id}/pledges/{pledge_id}/resolve")
 async def resolve_pledge(event_id: str, pledge_id: int, payload: ResolveRequest):
     event_or_404(event_id)
@@ -672,6 +908,8 @@ async def resolve_pledge(event_id: str, pledge_id: int, payload: ResolveRequest)
         state = "confirmed"
         update = (state, "")
         database.execute("UPDATE pledges SET guest_id = ?, matched_name = ? WHERE id = ?", (guest["id"], guest["name"], pledge_id))
+        learned_at = now()
+        database.execute("UPDATE guests SET learned_from_pledge_id = ?, learned_at = ? WHERE id = ?", (pledge_id, learned_at, guest["id"]))
     elif action == "amount":
         if payload.amount is None:
             raise HTTPException(400, "Enter an amount")
@@ -681,7 +919,12 @@ async def resolve_pledge(event_id: str, pledge_id: int, payload: ResolveRequest)
     else:
         raise HTTPException(400, "Unknown review action")
     database.execute("UPDATE pledges SET state = ?, reason = ?, updated_at = ? WHERE id = ?", (*update, now(), pledge_id))
-    database.audit(event_id, "usher_review", {"action": action, "reason": payload.reason}, pledge_id)
+    details = {"action": action, "reason": payload.reason}
+    if action == "guest":
+        updated_sessions = await update_live_listening_terms(event_id)
+        details.update({"listening_list_updated": True, "active_sessions_updated": updated_sessions, "guest_id": payload.guest_id})
+        database.audit(event_id, "listening_list_updated", {"guest_id": payload.guest_id, "by_pledge_id": pledge_id, "active_sessions_updated": updated_sessions}, pledge_id)
+    database.audit(event_id, "usher_review", details, pledge_id)
     await hub.publish(event_id, {"type": "pledge", "pledge": serialise_pledge(database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))), "state": event_state(event_id)})
     return event_state(event_id)
 
@@ -712,6 +955,22 @@ def latest_payment(event_id: str, pledge_id: int) -> dict | None:
         "SELECT * FROM payments WHERE event_id = ? AND pledge_id = ? ORDER BY id DESC LIMIT 1",
         (event_id, pledge_id),
     )
+
+
+def payment_page_url(token: str) -> str:
+    relative = f"/pay/{token}"
+    return f"{settings.public_url}{relative}" if settings.public_url else relative
+
+
+def ensure_payment_page_token(payment: dict) -> dict:
+    token = payment.get("public_token")
+    expires_at = payment.get("expires_at")
+    if not token or not expires_at:
+        token = token or secrets.token_urlsafe(32)
+        expires_at = expires_at or (datetime.now(timezone.utc) + timedelta(hours=DEMO_RETENTION_HOURS)).isoformat()
+        database.execute("UPDATE payments SET public_token = ?, expires_at = ? WHERE id = ?", (token, expires_at, payment["id"]))
+        payment = {**payment, "public_token": token, "expires_at": expires_at}
+    return payment
 
 
 def payment_snapshot(data: dict) -> dict:
@@ -779,9 +1038,11 @@ async def create_payment_link(event_id: str, pledge: dict, call: dict, guest: di
 
     existing = latest_payment(event_id, pledge["id"])
     if existing and existing["status"] in {"initialized", "pending", "success"}:
+        existing = ensure_payment_page_token(existing)
         return {
             "ok": True,
             "payment_link": existing["authorization_url"],
+            "payment_page": payment_page_url(existing["public_token"]),
             "reference": existing["reference"],
             "payment_status": existing["status"],
             "reused": True,
@@ -801,17 +1062,21 @@ async def create_payment_link(event_id: str, pledge: dict, call: dict, guest: di
         return {"ok": False, "error": str(exc)}
     data = created["data"]
     created_at = now()
+    public_token = secrets.token_urlsafe(32)
+    expires_at = (datetime.now(timezone.utc) + timedelta(hours=DEMO_RETENTION_HOURS)).isoformat()
     database.execute(
-        "INSERT INTO payments(event_id, pledge_id, reference, amount_kobo, email, authorization_url, status, paystack_status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'initialized', '', ?, ?, ?)",
-        (event_id, pledge["id"], data["reference"], created["amount_kobo"], email, data["authorization_url"], json.dumps({"message": created["body"].get("message")}, ensure_ascii=False), created_at, created_at),
+        "INSERT INTO payments(event_id, pledge_id, reference, amount_kobo, email, authorization_url, public_token, expires_at, status, paystack_status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'initialized', '', ?, ?, ?)",
+        (event_id, pledge["id"], data["reference"], created["amount_kobo"], email, data["authorization_url"], public_token, expires_at, json.dumps({"message": created["body"].get("message")}, ensure_ascii=False), created_at, created_at),
     )
     database.audit(event_id, "payment_link_created", {"reference": data["reference"], "amount_kobo": created["amount_kobo"], "email": email}, pledge["id"])
-    return {"ok": True, "payment_link": data["authorization_url"], "reference": data["reference"], "payment_status": "initialized", "reused": False}
+    return {"ok": True, "payment_link": data["authorization_url"], "payment_page": payment_page_url(public_token), "reference": data["reference"], "payment_status": "initialized", "reused": False}
 
 
 @app.post("/api/events/{event_id}/pledges/{pledge_id}/call/start")
 async def start_follow_up_call(event_id: str, pledge_id: int, payload: VoiceCallStart):
     event = event_or_404(event_id)
+    if event.get("demo") and len(event_calls(event_id)) >= DEMO_CALL_LIMIT:
+        raise HTTPException(429, "This private demo allows two follow-up calls. Start again for a fresh sandbox.")
     pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
     if not pledge:
         raise HTTPException(404, "Pledge was not found")

@@ -15,6 +15,8 @@ class Settings:
     data_dir: Path
     host: str
     port: int
+    public_url: str
+    sample_audio_path: Path | None
 
     @classmethod
     def load(cls) -> "Settings":
@@ -22,12 +24,18 @@ class Settings:
         data_dir = Path(values.get("PLEDGEBOOK_DATA_DIR") or ROOT / "data")
         if not data_dir.is_absolute():
             data_dir = ROOT / data_dir
+        sample_audio = (values.get("PLEDGEBOOK_SAMPLE_AUDIO") or "").strip()
+        sample_audio_path = Path(sample_audio) if sample_audio else None
+        if sample_audio_path and not sample_audio_path.is_absolute():
+            sample_audio_path = ROOT / sample_audio_path
         return cls(
             assemblyai_api_key=(values.get("ASSEMBLYAI_API_KEY") or "").strip(),
             paystack_secret_key=(values.get("PAYSTACK_SECRET_KEY") or "").strip(),
             data_dir=data_dir,
             host=values.get("PLEDGEBOOK_HOST") or "127.0.0.1",
             port=int(values.get("PLEDGEBOOK_PORT") or "8000"),
+            public_url=(values.get("PLEDGEBOOK_PUBLIC_URL") or "").strip().rstrip("/"),
+            sample_audio_path=sample_audio_path,
         )
 
     def require_assemblyai(self) -> str:
