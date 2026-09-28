@@ -53,3 +53,11 @@ def test_anonymous_donor_is_explicit_and_has_no_guest_match():
     assert turn.name == "Anonymous donor"
     assert turn.name_match.kind == "anonymous"
     assert turn.amount.minor == 50_000
+
+
+def test_same_turn_multiple_amounts_are_returned_for_a_visible_flag():
+    guests = [{"id": 1, "name": "Aisha Bello"}]
+    turn = extract_turn("Mrs Aisha Bello, 50K, quarter million", [], guests)
+    name_turn, amount_turn, reason = TurnWindow().add(turn)
+    assert name_turn is not None and amount_turn is not None
+    assert "More than one amount" in reason

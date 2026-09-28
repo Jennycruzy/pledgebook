@@ -13,18 +13,29 @@ an unclear or conflicting person becomes **Needs checking**. Every transition
 is an audit row. The original clip remains the evidence.
 
 ```text
-browser microphone
-        │ PCM16 frames
+browser microphone or real WAV upload
+        │ PCM16 frames / normalized WAV
         ▼
 FastAPI server ───────► AssemblyAI Realtime (live turns)
-   │        │
+   │        │                         │
    │        └──────────► SQLite + audit log + SSE updates
-   │
+   │                                  │
    └──────────► exact WAV clip ─► AssemblyAI Sync (word timings)
                                   │
                                   ▼
                          reconciliation and usher queue
+                                           │
+                         browser follow-up ◄┘
+                                  │ short-lived token
+                                  ▼
+                         AssemblyAI Voice Agent
 ```
+
+The browser never receives the AssemblyAI API key. WAV uploads are real human
+recordings and are normalized to the Realtime format before streaming. The
+follow-up browser session receives a short-lived Voice Agent token; its
+structured tool calls return to the FastAPI server, which writes call outcomes
+and refuses to share payment information before identity confirmation.
 
 The payment adapter is intentionally absent from the live path until Jenny
 creates Paystack test mode. The optional Gateway integration is also disabled

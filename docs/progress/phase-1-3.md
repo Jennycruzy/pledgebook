@@ -41,7 +41,7 @@ python3 -m pytest -q
 ```
 
 ```text
-27 passed in 0.50s
+28 passed in 0.24s
 ```
 
 The local smoke server was started with `python3 -m uvicorn app.main:app

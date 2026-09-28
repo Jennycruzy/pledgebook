@@ -24,7 +24,7 @@ python3 -m pytest -q
 ```
 
 ```text
-27 passed in 0.50s
+28 passed in 0.24s
 ```
 
 ```sh

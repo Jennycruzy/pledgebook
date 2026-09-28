@@ -114,6 +114,10 @@ class TurnWindow:
             self.pending_name = None
             self.pending_amount = None
             return name_turn, amount_turn, None
+        if name_turn and not amount_turn and "More than one amount" in (turn.amount.reason or ""):
+            self.pending_name = None
+            self.pending_amount = None
+            return name_turn, turn, turn.amount.reason
 
         # Pair only adjacent final turns. This prevents an old name from
         # being attached to a later amount after another donor has spoken.
