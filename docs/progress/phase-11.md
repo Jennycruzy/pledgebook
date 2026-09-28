@@ -4,8 +4,8 @@
 
 ## Built
 
-- GitHub Actions workflow runs the Python tests, Python compilation, and
-  browser JavaScript syntax check.
+- CircleCI configuration runs the Python tests, Python compilation, and browser
+  JavaScript syntax check in separate clean jobs.
 - The repository contains the MIT license, API verification record,
   architecture, privacy, evaluation status, judge guide, and limitations.
 - The current pure-rule suite has 28 tests covering amounts, currencies,
@@ -14,6 +14,24 @@
 - No test returns a hand-written transcription or payment response. Network
   evidence remains in the committed verification records, while private audio
   and live response payloads stay ignored.
+
+## Commands and actual output
+
+```sh
+python3 -m pytest -q
+python3 -m compileall -q app scripts
+node --check web/app.js
+```
+
+```text
+28 passed in 0.48s
+the compile and JavaScript checks completed successfully
+```
+
+The previous GitHub Actions run failed immediately and exposed no job steps in
+the public run record. Its workflow file has been removed. CircleCI is now the
+only repository CI configuration; it must be enabled for this repository in
+Jenny's CircleCI account before its first hosted run.
 
 ## Not done
 

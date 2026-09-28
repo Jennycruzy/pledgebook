@@ -16,6 +16,9 @@ assistant may use an AssemblyAI generated voice under Jenny's decision on
 2026-09-28. Paystack Test Mode is configured locally. No live payment key is
 used and no real money can move through this build.
 
+CircleCI is the repository's continuous-integration service. It runs the
+Python tests and source checks in clean Python and Node jobs.
+
 ## Run it locally
 
 ```sh

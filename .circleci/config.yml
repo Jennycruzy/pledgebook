@@ -1,0 +1,32 @@
+version: 2.1
+
+jobs:
+  python-checks:
+    docker:
+      - image: cimg/python:3.11
+    steps:
+      - checkout
+      - run:
+          name: Install Python dependencies
+          command: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest
+      - run:
+          name: Run Python tests
+          command: python -m pytest -q
+      - run:
+          name: Compile Python sources
+          command: python -m compileall -q app scripts
+
+  browser-checks:
+    docker:
+      - image: cimg/node:20.18.1
+    steps:
+      - checkout
+      - run:
+          name: Check browser JavaScript
+          command: node --check web/app.js
+
+workflows:
+  checks:
+    jobs:
+      - python-checks
+      - browser-checks
