@@ -55,3 +55,73 @@ The Paystack Test Mode webhook still must be set by the account owner to:
 `https://pledgebook.54-154-121-30.sslip.io/api/paystack/webhook`
 
 A complete test-card payment has not been claimed yet. The exact Paystack reference will be added here only after the browser checkout succeeds and the signed webhook plus server-side verification turn one pledge to `Redeemed`.
+
+## Stage 2 — learning during the event
+
+Status: **built; the required before/after walk-in recording is still pending.**
+
+An active Realtime capture session is registered on the server. When a guest is
+added or an usher resolves a flag, the server sends
+`UpdateConfiguration` with the current guest terms to that session and writes a
+`listening_list_updated` audit entry. Later pledges store the source pledge and
+time in `recognised_from_pledge_id` and `recognised_at` when the guest came from
+that correction.
+
+Checks run:
+
+```text
+python3 -m compileall -q app
+python3 -m pytest -q
+28 passed in 0.22s
+```
+
+The API handshake with the real AssemblyAI account already accepted the same
+`UpdateConfiguration` message; that evidence is in
+[`docs/api-verification.md`](../api-verification.md). It did not contain a
+walk-in recording, so no recognition improvement number is claimed.
+
+## Stage 3 — private pledge moment
+
+Status: **built; public browser payment proof is still pending.**
+
+Payment links now receive an unguessable token and a 24-hour expiry. The private
+page shows the event, guest, amount, verbatim words, a safe trimmed audio clip
+when exactly one guest name and one amount are present, and the Paystack Test
+Mode button. An adjacent or ambiguous pledge is shown as text instead of audio.
+
+Real recording check using Jenny's private AssemblyAI excerpt:
+
+```text
+recheck_span_ms=[583, 5962]
+safe_seconds=5.499
+reason=Audio contains only this guest's rechecked name and amount.
+```
+
+The same helper refused the full multi-pledge clip with:
+`Audio is not shown because the amount was not a single clear phrase.`
+
+## Stages 4–5 — screen and judge path
+
+Status: **implemented; a stranger's timed walk-through is still required.**
+
+The deployed UI now includes large pledged/received totals, a progress bar,
+new-pledge animation, spoken and Paystack-paid times when a verified payment
+has a `paid_at`, the correction marker, a sample-recording button, an
+add-yourself form that inserts the name into the MC script, a QR usher link,
+walk-in and anonymous actions, private event URLs, a session summary, and
+reset. The public page serves the new controls over HTTPS; a signed-out manual
+walk-through remains an owner test rather than a claim.
+
+## Stages 6–8
+
+Status: **not claimed complete.** The deployed benchmark, owner-reviewed
+wrong-person number, cover image, video, slides, and submission text still need
+real recordings and the owner's final review. README and judge-guide copy now
+point to the public URL and state the limits honestly.
+
+## Continuous integration check
+
+CircleCI is now the active repository check. Public CircleCI API output for
+pipeline **#4**, commit `5ab20322ef578c8ed1bb9f2b6a30fccadc998921`, reports
+workflow `checks` **success** (created 14:19 UTC, stopped 14:19 UTC). The old
+GitHub Actions workflow is not used.
