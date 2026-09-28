@@ -31,6 +31,10 @@ function render() {
   const selfGuest = guests.find((g) => g.id === state.selfGuestId) || (guests.length === 1 ? guests[0] : null);
   $('self-script-line').textContent = selfGuest ? `${[selfGuest.title, selfGuest.name].filter(Boolean).join(' ')} — one hundred thousand naira!` : 'Add yourself in Guest list to put your name here.';
   $('pledge-feed').innerHTML = pledges.length ? pledges.slice(0, 12).map(pledgeRow).join('') : '<div class="empty-list">No pledges yet. Press the microphone and read the script.</div>';
+  const corrections = pledges.filter((p) => p.state === 'corrected').length;
+  const unresolved = pledges.filter((p) => p.state === 'flagged').length;
+  const learned = pledges.filter((p) => p.recognised_from_pledge_id).length;
+  $('summary-text').innerHTML = `<div><strong>${pledges.length}</strong><span>Pledges captured</span></div><div><strong>${corrections}</strong><span>Recheck corrections</span></div><div><strong>${unresolved}</strong><span>Needs checking</span></div><div><strong>${learned}</strong><span>Recognised after a correction</span></div>`;
   $('register-list').innerHTML = pledges.length ? pledges.map(pledgeRow).join('') : '<div class="empty-list">The register will fill as pledges are heard.</div>';
   const flags = pledges.filter((p) => p.state === 'flagged');
   $('review-list').innerHTML = flags.length ? flags.map(reviewRow).join('') : '<div class="empty-list">Nothing needs checking right now.</div>';
@@ -56,12 +60,12 @@ function render() {
     return `<div class="pledge-row"><div><strong>${esc(guestName)}</strong><div class="pledge-sub">${esc(labelFor(p.state))} · ${guest && guest.consent_to_contact ? 'Follow-up agreed' : 'No follow-up consent recorded'}${callSummary}</div></div><div>${p.item ? esc(p.item) : money(p.amount, p.currency)} ${allowed ? `<button class="quiet" data-call-pledge="${p.id}">Call about this</button>` : ''}${paymentAction ? `<div class="payment-actions">${paymentAction}</div>` : ''}</div></div>`;
   }).join('') : '<div class="empty-list">A confirmed pledge will appear here.</div>';
   const newest = pledges[0];
-  if (newest) { $('newest').classList.remove('empty'); $('newest').innerHTML = `${esc(newest.matched_name || newest.heard_name || 'Name unclear')} <span class="pledge-amount">${newest.item ? esc(newest.item) : money(newest.amount, newest.currency)}</span>${newest.recognised_from_pledge_id ? '<small class="recognised">Recognised from a correction</small>' : ''}`; $('new-state').textContent = labelFor(newest.state); $('new-state').className = `state ${newest.state}`; }
+  if (newest) { $('newest').classList.remove('empty','pledge-arrival'); void $('newest').offsetWidth; $('newest').classList.add('pledge-arrival'); $('newest').innerHTML = `${esc(newest.matched_name || newest.heard_name || 'Name unclear')} <span class="pledge-amount">${newest.item ? esc(newest.item) : money(newest.amount, newest.currency)}</span>${newest.recognised_from_pledge_id ? '<small class="recognised">Recognised from a correction</small>' : ''}`; $('new-state').textContent = labelFor(newest.state); $('new-state').className = `state ${newest.state}`; }
   $('export').href = `/api/events/${event.id}/export.csv`;
 }
 function labelFor(state) { return ({provisional:'Provisional',confirmed:'Confirmed',corrected:'Rechecked — changed',flagged:'Needs checking',rejected:'Rejected',redeemed:'Redeemed'}[state] || state); }
-function pledgeRow(p) { const payment = (state.event.payments?.records || []).find((item) => item.pledge_id === p.id); const paid = payment?.status === 'success' ? ` · paid ${shortTime(payment.paid_at || payment.updated_at)}` : ''; const spoken = p.created_at ? `Spoken ${shortTime(p.created_at)}` : ''; return `<div class="pledge-row"><div class="pledge-main"><div class="pledge-name">${esc(p.matched_name || p.heard_name || 'Name unclear')}</div><div class="pledge-sub">${spoken}${paid} · Heard: ${esc(p.live_text || '—')}${p.recheck_text ? ` · Rechecked: ${esc(p.recheck_text)}` : ''}${p.reason ? ` · ${esc(p.reason)}` : ''}${p.recognised_from_pledge_id ? ' · Recognised from a correction' : ''}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div><div class="pledge-amount">${p.item ? esc(p.item) : money(p.amount,p.currency)}</div><span class="state ${p.state}">${labelFor(p.state)}</span></div></div>`; }
-function reviewRow(p) { const guests = state.event.guests.slice(0, 8); return `<div class="review-row"><div><strong>${esc(p.heard_name || 'Name unclear')} · ${p.item ? esc(p.item) : money(p.amount,p.currency)}</strong><div class="pledge-sub">${esc(p.reason || 'Please listen to the audio moment and choose what you heard.')}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div class="review-actions">${guests.map(g => `<button data-review="${p.id}" data-guest="${g.id}">This is ${esc([g.title,g.name].filter(Boolean).join(' '))}</button>`).join('')}<button data-amount="${p.id}">Fix amount</button><button data-reject="${p.id}">Not a pledge</button></div></div>`; }
+function pledgeRow(p) { const payment = (state.event.payments?.records || []).find((item) => item.pledge_id === p.id); const paid = payment?.status === 'success' && payment.paid_at ? ` · paid ${shortTime(payment.paid_at)}` : ''; const spoken = p.created_at ? `Spoken ${shortTime(p.created_at)}` : ''; return `<div class="pledge-row"><div class="pledge-main"><div class="pledge-name">${esc(p.matched_name || p.heard_name || 'Name unclear')}</div><div class="pledge-sub">${spoken}${paid} · Heard: ${esc(p.live_text || '—')}${p.recheck_text ? ` · Rechecked: ${esc(p.recheck_text)}` : ''}${p.reason ? ` · ${esc(p.reason)}` : ''}${p.recognised_from_pledge_id ? ' · Recognised from a correction' : ''}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div><div class="pledge-amount">${p.item ? esc(p.item) : money(p.amount,p.currency)}</div><span class="state ${p.state}">${labelFor(p.state)}</span></div></div>`; }
+function reviewRow(p) { const guests = state.event.guests.slice(0, 8); return `<div class="review-row"><div><strong>${esc(p.heard_name || 'Name unclear')} · ${p.item ? esc(p.item) : money(p.amount,p.currency)}</strong><div class="pledge-sub">${esc(p.reason || 'Please listen to the audio moment and choose what you heard.')}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div class="review-actions">${guests.map(g => `<button data-review="${p.id}" data-guest="${g.id}">This is ${esc([g.title,g.name].filter(Boolean).join(' '))}</button>`).join('')}<button data-walkin="${p.id}">New walk-in</button><button data-anonymous="${p.id}">Anonymous</button><button data-amount="${p.id}">Fix amount</button><button data-reject="${p.id}">Not a pledge</button></div></div>`; }
 async function refresh() { state.event = await api(`/api/events/${state.event.event.id}`); render(); }
 
 async function createEvent(event) { event.preventDefault(); clearError(); try { const form = new FormData(event.target); state.event = await api('/api/events', {method:'POST', body: JSON.stringify({name:form.get('name'), organisation:form.get('organisation'), event_date:form.get('event_date'), target:Number(form.get('target') || 0), minimum:Number(form.get('minimum') || 0), maximum:Number(form.get('maximum') || 0), demo:true})}); localStorage.removeItem('pledgebook_self_guest_id'); $('setup').hidden = true; $('dashboard').hidden = false; render(); connectSSE(); } catch (error) { showError(error.message); } }
@@ -218,6 +222,25 @@ document.addEventListener('click', async (event) => {
   if (guestButton) {
     try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${guestButton.dataset.review}/resolve`, {method:'POST', body:JSON.stringify({action:'guest', guest_id:Number(guestButton.dataset.guest)})}); render(); }
     catch (error) { showError(error.message); }
+  }
+  const walkinButton = event.target.closest('[data-walkin]');
+  if (walkinButton) {
+    const name = prompt('What is the walk-in guest\'s name?');
+    if (!name?.trim()) return;
+    const title = prompt('Title (optional, for example Mr or Chief):') || '';
+    const phone = prompt('Phone (optional):') || '';
+    try {
+      const guest = await api(`/api/events/${state.event.event.id}/guests`, {method:'POST', body:JSON.stringify({title, name:name.trim(), phone, email:'', consent_to_contact:false})});
+      state.event = await api(`/api/events/${state.event.event.id}/pledges/${walkinButton.dataset.walkin}/resolve`, {method:'POST', body:JSON.stringify({action:'guest', guest_id:guest.id})});
+      render();
+    } catch (error) { showError(error.message); }
+    return;
+  }
+  const anonymousButton = event.target.closest('[data-anonymous]');
+  if (anonymousButton) {
+    try { state.event = await api(`/api/events/${state.event.event.id}/pledges/${anonymousButton.dataset.anonymous}/resolve`, {method:'POST', body:JSON.stringify({action:'anonymous'})}); render(); }
+    catch (error) { showError(error.message); }
+    return;
   }
   const amountButton = event.target.closest('[data-amount]');
   if (amountButton) {

@@ -41,6 +41,28 @@ DEMO_RETENTION_HOURS = 24
 # One event can have one or more capture tabs. Each connection has a lock so
 # an usher's listening-list update cannot interleave with an audio frame.
 live_sessions: dict[str, dict[object, asyncio.Lock]] = {}
+cleanup_task: asyncio.Task | None = None
+
+
+async def cleanup_loop() -> None:
+    while True:
+        await asyncio.sleep(3600)
+        purge_expired_demo_events()
+
+
+@app.on_event("startup")
+async def start_cleanup_loop() -> None:
+    global cleanup_task
+    cleanup_task = asyncio.create_task(cleanup_loop())
+
+
+@app.on_event("shutdown")
+async def stop_cleanup_loop() -> None:
+    global cleanup_task
+    if cleanup_task:
+        cleanup_task.cancel()
+        await asyncio.gather(cleanup_task, return_exceptions=True)
+        cleanup_task = None
 
 
 class EventCreate(BaseModel):
@@ -315,6 +337,7 @@ async def add_guest(event_id: str, payload: GuestCreate):
     guest_id = database.execute("INSERT INTO guests(event_id, title, name, phone, email, consent_to_contact, group_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                                 (event_id, payload.title.strip(), payload.name.strip(), payload.phone.strip(), payload.email.strip(), int(payload.consent_to_contact), payload.group.strip(), now()))
     database.audit(event_id, "guest_added", {"guest_id": guest_id, "name": payload.name.strip()})
+    await update_live_listening_terms(event_id)
     return database.one("SELECT * FROM guests WHERE id = ?", (guest_id,))
 
 
@@ -337,6 +360,7 @@ async def import_guests(event_id: str, file: UploadFile = File(...)):
                           (row.get("group") or "").strip(), now()))
         count += 1
     database.audit(event_id, "guests_imported", {"count": count, "filename": file.filename or "guest-list.csv"})
+    await update_live_listening_terms(event_id)
     return {"imported": count, "state": event_state(event_id)}
 
 
@@ -901,6 +925,10 @@ async def resolve_pledge(event_id: str, pledge_id: int, payload: ResolveRequest)
             raise HTTPException(400, "A reason is required when rejecting a pledge")
         state = "rejected"
         update = (state, payload.reason.strip())
+    elif action == "anonymous":
+        state = "confirmed"
+        update = (state, "Anonymous pledge — no follow-up call.")
+        database.execute("UPDATE pledges SET guest_id = NULL, matched_name = 'Anonymous donor' WHERE id = ?", (pledge_id,))
     elif action == "guest":
         guest = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ?", (payload.guest_id or -1, event_id))
         if not guest:
