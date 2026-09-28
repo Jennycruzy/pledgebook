@@ -12,11 +12,11 @@
 
 | Stage | Status | Evidence |
 |---|---|---|
-| 1. Deploy and finish payment | Not started | — |
-| 2. Learn names during the event | Not started | — |
-| 3. Show the exact pledge moment | Not started | — |
-| 4. Big screen polish | Not started | — |
-| 5. Complete the judge path | Not started | — |
+| 1. Deploy and finish payment | Deployed; payment still needs the owner's checkout | Public HTTPS health check and real WAV upload pass; Paystack browser payment pending |
+| 2. Learn names during the event | Built; real before/after recording pending | Live-list update code and real AssemblyAI handshake |
+| 3. Show the exact pledge moment | Built; public payment-page check pending | Safe clip checks on Jenny's real recording |
+| 4. Big screen polish | Implemented; screenshot review pending | Public UI serves large totals, progress and state changes |
+| 5. Complete the judge path | Implemented; timed stranger walk-through pending | Add-yourself, script, sample, QR, call and reset controls |
 | 6. Benchmark | Not started | — |
 | 7. README and repository front page | Not started | — |
 | 8. Submission materials | Not started | — |
@@ -55,6 +55,45 @@ The Paystack Test Mode webhook still must be set by the account owner to:
 `https://pledgebook.54-154-121-30.sslip.io/api/paystack/webhook`
 
 A complete test-card payment has not been claimed yet. The exact Paystack reference will be added here only after the browser checkout succeeds and the signed webhook plus server-side verification turn one pledge to `Redeemed`.
+
+### Public request and real-recording smoke check
+
+The first public POST check returned `422 body required` even though the same
+request worked on the server. The cause was the nginx WebSocket upgrade header
+being applied to every request, which dropped ordinary JSON and multipart
+bodies. The nginx config now limits upgrade headers to `/ws/`; API requests use
+the normal proxy location.
+
+Commands and real output after the fix:
+
+```text
+sudo nginx -t
+nginx: the configuration file /etc/nginx/nginx.conf syntax is ok
+nginx: configuration file /etc/nginx/nginx.conf test is successful
+
+POST https://pledgebook.54-154-121-30.sslip.io/api/events
+HTTP/1.1 200 OK
+{"event":{"id":"551acf90db84420e8867006c916d2598", ...}, "guests":[...], "pledges":[]}
+
+POST https://pledgebook.54-154-121-30.sslip.io/api/events/551acf90db84420e8867006c916d2598/upload
+HTTP/1.1 200 OK
+{"accepted":true,"message":"The recording is being heard now. Watch the pledge list for updates."}
+```
+
+The upload was the real human recording supplied by Jenny at
+`/Users/user/Downloads/Voice 260927_194623.wav` (70.4 seconds, 48 kHz mono).
+AssemblyAI processed it on the deployed server. The resulting four pledge
+records were:
+
+```text
+2 confirmed: ₦250,000 (Chief Emeka Okonkwo), ₦100,000 (Deaconess Ngozi Eze)
+2 flagged: a clip with two amounts, and a currency disagreement
+Pledged total: ₦350,000
+Received total: ₦0
+```
+
+The temporary smoke event and its audio were deleted from the server after the
+check. This is ingestion evidence, not a benchmark or a payment claim.
 
 ## Stage 2 — learning during the event
 
