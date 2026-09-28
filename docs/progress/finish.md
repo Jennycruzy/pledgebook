@@ -161,6 +161,6 @@ point to the public URL and state the limits honestly.
 ## Continuous integration check
 
 CircleCI is now the active repository check. Public CircleCI API output for
-pipeline **#4**, commit `5ab20322ef578c8ed1bb9f2b6a30fccadc998921`, reports
-workflow `checks` **success** (created 14:19 UTC, stopped 14:19 UTC). The old
+pipeline **#7**, commit `edbabc277fea77b7899e8f64e3ae70e897eea4ba`, reports
+workflow `checks` **success** (checked 28 September 2026, 15:07 UTC). The old
 GitHub Actions workflow is not used.
