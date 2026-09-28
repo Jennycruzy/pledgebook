@@ -1,0 +1,51 @@
+PLEDGEBOOK — JENNY INPUT STATUS
+Updated 2026-09-28
+
+RECORDING RECEIVED
+
+You supplied `/Users/user/Downloads/Voice 260927_194623.wav`.
+The real Sync and Realtime speech checks have run on it. No new audio is
+needed for the Phase 0 timing check. The original remains in Downloads.
+A converted excerpt and the detailed transcripts are in Git-ignored
+`eval/private/phase-0/`; they are not public files.
+
+ALREADY PROVIDED
+
+- AssemblyAI key, saved locally.
+- Dashboard screenshot showing $150 credits at the time of that screenshot.
+- One real human voice recording.
+
+AT THE PHASE 0 HARD STOP
+
+The Phase 0 owner decisions are recorded:
+
+1. Paystack test mode is not available yet. Payment work stays disabled until
+   Jenny creates the separate Paystack account and saves its test secret in the
+   local `.env` file.
+2. Generated speech is allowed for the clearly disclosed automated assistant
+   only. All MC and benchmark recordings remain real human recordings.
+
+If you know the exact words spoken in the recording, they can become an
+independent answer key. The technical timing check does not depend on this.
+
+CURRENT BUILD STATE
+
+Phases 1–3 are implemented locally and ready for independent review. The
+browser has microphone and real WAV paths, Realtime provisional records, Sync
+rechecks, evidence audio, usher actions, and CSV export. The supplied long
+recording has been run as a diagnostic and its failures are recorded in
+`docs/progress/phase-1-3.md`; no accuracy claim is being made from it.
+
+BEFORE DEPLOYMENT (PHASE 1)
+
+- Your chosen GitHub repository, server access, and domain.
+
+BEFORE TEST PAYMENTS (PHASE 8)
+
+- A Paystack TEST secret key saved locally into .env, never pasted in chat.
+
+LATER RECORDINGS
+
+- Phase 4: the walk-in test, using a script supplied by the builder.
+- Phase 9: benchmark recordings by at least two real people, using scripts
+  and answer keys supplied by the builder.

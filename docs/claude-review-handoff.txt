@@ -1,0 +1,67 @@
+PLEDGEBOOK — PHASE 0 WORK IN PROGRESS
+Updated 2026-09-27
+
+Codex is the builder. This is a handoff of evidence, not a completion claim.
+Jenny's revised specification selecting Sync is the controlling specification.
+
+FILES
+- docs/api-verification.md
+- docs/progress/phase-0.md (latest continuation supersedes historical status)
+- scripts/phase0_probe.py
+- docs/evidence/phase-0/20260927T213518326706Z-accounts.json
+- docs/evidence/phase-0/20260927T213548973343Z-accounts.json
+- docs/spec-clarifications.txt
+- docs/next-step.txt
+
+ACTUALLY RUN
+python3 scripts/phase0_probe.py accounts
+
+First attempt: sandbox DNS failures, recorded explicitly.
+Approved network retry: Realtime Begin/Termination succeeded, Voice Agent
+short-lived token creation HTTP 200, Gateway example model denied HTTP 400.
+Exit code 1 reflects that denial. No audio sent and no speech synthesized.
+An earlier separate check of another Gateway model was also denied.
+
+ASSEMBLYAI BALANCE
+Jenny's dashboard screenshot showed $150. Not independently queried by API.
+
+CURRENT STATUS
+Jenny supplied a real 70.4-second WAV. Sync and Realtime speech checks
+succeeded on it, and the Voice Agent check completed with assistant audio,
+one tool call, a tool result, and clean teardown. Paystack account readiness is
+not confirmed. Application code, deployment, public repository, product
+accuracy tests and benchmarks do not exist. Phase 0 evidence is ready for
+independent review; the builder is beginning implementation with Gateway and
+Paystack disabled.
+
+REVIEW FOCUS
+Check source claims, captured responses and script behavior independently.
+Check that a connection-only result is never called a transcription result.
+Check secret redaction and the distinction between documentation and live proof.
+Check the grouped conflicts in docs/spec-clarifications.txt, especially the
+synthetic-voice ban versus the speaking assistant and disputed amounts.
+
+OWNER INPUT
+Jenny approved generated speech only for the clearly disclosed assistant. All
+human recordings remain real. Jenny has no Paystack account yet; payment work
+must remain visibly disabled until one exists. Do not ask Jenny to choose an AI
+model or find model settings.
+
+HARD STOP
+No application code before the required Phase 0 review and Jenny approval.
+
+UPDATE 2026-09-28 (supersedes missing-audio and pre-build statements above)
+Jenny supplied a 70.4-second real WAV. Sync full-call and 6.4-second short
+clip calls succeeded; the excerpt also completed Realtime turns. Detailed
+actual outputs and limitations are appended to docs/progress/phase-0.md.
+Captured transcripts are private and Git-ignored under eval/private/phase-0/
+until publication review. Short clip Sync times were 1.59 and 1.82 seconds.
+Live partial 200,000 changed to final 250,000 in a later Turn; the name and
+amount finalized in separate turns. No screen timing or accuracy benchmark
+has been claimed. Jenny approved generated speech for the disclosed assistant
+only, and has no Paystack account. Phases 1–3 are implemented locally with
+microphone and WAV input, Realtime, Sync, SQLite, evidence audio, and usher
+review. A follow-up assistant slice is also implemented with real short-lived
+Voice Agent tokens and server-side call/tool audit records; payment remains
+disabled. Review files are docs/progress/phase-1-3.md and
+docs/progress/phase-8.md. Neither phase is reviewer-passed or Jenny-approved.
