@@ -14,7 +14,7 @@
 |---|---|---|
 | 1. Deploy and finish payment | Deployed; payment still needs the owner's checkout | Public HTTPS health check and real WAV upload pass; Paystack browser payment pending |
 | 2. Learn names during the event | Built; real before/after recording pending | Live-list update code and real AssemblyAI handshake |
-| 3. Show the exact pledge moment | Built; public payment-page check pending | Safe clip checks on Jenny's real recording |
+| 3. Show the exact pledge moment | Built; successful card payment still pending | Safe clip checks and public private-page check |
 | 4. Big screen polish | Implemented; screenshot review pending | Public UI serves large totals, progress and state changes |
 | 5. Complete the judge path | Implemented; timed stranger walk-through pending | Add-yourself, script, sample, QR, call and reset controls |
 | 6. Benchmark | Not started | — |
