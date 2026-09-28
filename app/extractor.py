@@ -67,16 +67,19 @@ def extract_turn(text: str, words: Optional[list[dict]], guests: Iterable[dict])
     heard_name = None
     matched = None
     normalized_text = normalize_name(text)
+    if re.search(r"\b(?:anonymous|a son of the soil|a daughter of the soil|son of the soil|daughter of the soil)\b", text, re.IGNORECASE):
+        heard_name = "Anonymous donor"
+        matched = NameMatch(heard_name, None, None, "anonymous", "Anonymous pledge — no follow-up call.")
     matched_guests = []
     for guest in guest_rows:
         guest_norm = normalize_name(guest["name"])
         if guest_norm and guest_norm in normalized_text:
             matched_guests.append(guest)
-    if len(matched_guests) == 1:
+    if heard_name is None and len(matched_guests) == 1:
         guest = matched_guests[0]
         heard_name = guest["name"]
         matched = NameMatch(heard_name, guest["id"], guest["name"], "matched")
-    elif len(matched_guests) > 1:
+    elif heard_name is None and len(matched_guests) > 1:
         matched = NameMatch(text, None, None, "ambiguous", "More than one guest name was heard — please check.")
     if heard_name is None:
         heard_name = _name_phrase(text)

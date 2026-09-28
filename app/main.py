@@ -288,12 +288,16 @@ async def confirm_pledge(event_id: str, pledge_id: int):
         current_guest = pledge.get("guest_id")
         recheck_guest = recheck.name_match.guest_id if recheck.name_match else None
         amount = recheck.amount
+        anonymous = pledge.get("heard_name") == "Anonymous donor"
         if not amount.is_clear:
             state, reason = "flagged", amount.reason or "Amount unclear — please check the recording."
         elif pledge.get("currency") and amount.currency and pledge["currency"] != amount.currency:
             state, reason = "flagged", "The recheck heard a different currency — please check."
         elif current_guest and recheck_guest and current_guest != recheck_guest:
             state, reason = "flagged", "The recheck heard a different guest — please check."
+            current_guest = None
+        elif anonymous or (recheck.name_match and recheck.name_match.kind == "anonymous"):
+            state, reason = "confirmed", "Anonymous pledge — no follow-up call."
             current_guest = None
         elif recheck.name_match and recheck.name_match.kind != "matched":
             state, reason = "flagged", recheck.name_match.reason or "The name needs a human check."
@@ -328,11 +332,13 @@ async def create_live_pledge(event_id: str, live_text: str, live_words: list[dic
         state, reason = "flagged", amount.reason or "Amount unclear — please check."
     elif not name_turn.name:
         state, reason = "flagged", "Name unclear — please confirm."
+    elif name_match and name_match.kind == "anonymous":
+        state, reason = "provisional", "Anonymous pledge — no follow-up call."
     elif not name_match or name_match.guest_id is None:
         state, reason = "flagged", name_match.reason if name_match else "Name not on the guest list — please confirm."
-    elif event["min_minor"] and amount.minor < event["min_minor"]:
+    elif amount.minor is not None and event["min_minor"] and amount.minor < event["min_minor"]:
         state, reason = "flagged", "Amount is below this event's allowed minimum."
-    elif event["max_minor"] and amount.minor > event["max_minor"]:
+    elif amount.minor is not None and event["max_minor"] and amount.minor > event["max_minor"]:
         state, reason = "flagged", "Amount is above this event's allowed maximum."
     start_ms = min(name_turn.start_ms, amount_turn.start_ms)
     end_ms = max(name_turn.end_ms, amount_turn.end_ms)

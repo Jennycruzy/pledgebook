@@ -1,5 +1,5 @@
 from app.amounts import parse_amount
-from app.extractor import TurnWindow, _amount_phrase
+from app.extractor import TurnWindow, _amount_phrase, extract_turn
 
 
 def test_one_bare_number_can_be_extracted_from_a_recheck_sentence():
@@ -46,3 +46,10 @@ def test_turn_window_does_not_reuse_an_old_name_after_another_turn():
     paired_name, paired_amount, reason = window.add(extract_turn("250,000 naira", [{"start": 4500, "end": 5500}], guests))
     assert paired_name is not None
     assert paired_name.name == "Aisha Bello"
+
+
+def test_anonymous_donor_is_explicit_and_has_no_guest_match():
+    turn = extract_turn("A son of the soil, fifty thousand naira", [], [])
+    assert turn.name == "Anonymous donor"
+    assert turn.name_match.kind == "anonymous"
+    assert turn.amount.minor == 50_000
