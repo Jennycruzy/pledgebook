@@ -24,6 +24,13 @@ CREATE TABLE IF NOT EXISTS memberships (
   org_id TEXT NOT NULL REFERENCES organisations(id), user_id INTEGER NOT NULL REFERENCES users(id),
   role TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (org_id, user_id)
 );
+CREATE TABLE IF NOT EXISTS event_grants (
+  event_id TEXT NOT NULL REFERENCES events(id),
+  org_id TEXT NOT NULL REFERENCES organisations(id),
+  user_id INTEGER NOT NULL REFERENCES users(id),
+  role TEXT NOT NULL, created_at TEXT NOT NULL,
+  PRIMARY KEY (event_id, user_id)
+);
 CREATE TABLE IF NOT EXISTS sessions (
   token_hash TEXT PRIMARY KEY, user_id INTEGER NOT NULL REFERENCES users(id),
   org_id TEXT, created_at TEXT NOT NULL, expires_at TEXT NOT NULL
@@ -180,6 +187,14 @@ class Database:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
         conn.execute("UPDATE events SET sample = 1 WHERE demo = 1 AND sample = 0")
         conn.execute("CREATE INDEX IF NOT EXISTS events_org ON events(org_id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS event_grants_user ON event_grants(user_id, org_id)")
+        # Preserve access for ushers who accepted event invitations before
+        # event-scoped grants were introduced.
+        conn.execute(
+            "INSERT OR IGNORE INTO event_grants(event_id, org_id, user_id, role, created_at) "
+            "SELECT event_id, org_id, accepted_by, 'usher', accepted_at FROM invites "
+            "WHERE role = 'usher' AND event_id IS NOT NULL AND accepted_by IS NOT NULL AND accepted_at IS NOT NULL"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS audit_event ON audit_log(event_id, id)")
         conn.execute("CREATE INDEX IF NOT EXISTS payments_public_token ON payments(public_token)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS payments_public_token_unique ON payments(public_token) WHERE public_token IS NOT NULL")

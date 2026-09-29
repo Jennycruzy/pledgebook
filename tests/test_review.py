@@ -64,7 +64,7 @@ def test_usher_cannot_change_a_confirmed_pledge(owner, event):
     from conftest import new_account
     guest = add_guest(owner, event["id"])
     confirmed = add_pledge(event["id"], guest)
-    token = owner.post("/api/organisation/invites", {"role": "usher"}).json()["url"].rsplit("/", 1)[-1]
+    token = owner.post("/api/organisation/invites", {"role": "usher", "event_id": event["id"]}).json()["url"].rsplit("/", 1)[-1]
     usher = new_account(invite=token)
     assert resolve(usher, event["id"], confirmed, action="amount", amount=1).status_code == 403
     flagged = add_pledge(event["id"], None, state="flagged")

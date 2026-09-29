@@ -6,7 +6,7 @@
 > Anything uncertain goes to a person. Only then does a pledge enter collection.
 
 At a Nigerian church launching or school fundraiser, pledges are shouted across a
-noisy hall: *"Chief Emeka Okonkwo — two hundred and fifty thousand naira!"*
+noisy hall: *"A guest pledges two hundred and fifty thousand naira!"*
 Someone scribbles it on paper, half the names are misspelled, and months later
 nobody can say who promised what. Pledgebook listens to the MC, keeps the exact
 audio of every pledge as evidence, checks it twice, asks a person whenever the
@@ -14,8 +14,8 @@ two passes disagree or anything is unclear, and then gives every guest a private
 page to pay, promise a date, or say that something is wrong.
 
 **Open it:** [pledgebook.54-154-121-30.sslip.io](https://pledgebook.54-154-121-30.sslip.io/)
-— create an account for your organisation, or try the guided path in
-[`docs/judge-guide.md`](docs/judge-guide.md).
+— create an account for your organisation, or follow the
+[`operator walkthrough`](docs/judge-guide.md).
 
 The hard question it answers: **can a promise shouted across a noisy hall become
 money in the bank without ever crediting the wrong person?**
@@ -59,7 +59,7 @@ money in the bank without ever crediting the wrong person?**
   recording anything and calls server tools to open checkout, record a promised
   date, record a dispute or stop reminders. It never changes the amount.
 
-## What makes it a real product, not a demo
+## Product safeguards
 
 - Accounts, organisations and **owner / admin / usher roles**. Ushers never see
   guest phone numbers or emails. Every event API, export, audio clip and live
@@ -112,7 +112,7 @@ sample event. The microphone needs HTTPS when deployed; localhost is allowed.
 Tests run without any service keys:
 
 ```sh
-python3 -m pip install pytest
+python3 -m pip install -r requirements-dev.txt
 python3 -m pytest -q
 ```
 

@@ -191,6 +191,12 @@ class Auth:
         membership = None
         if event and event.get("org_id"):
             membership = next((m for m in user["memberships"] if m["org_id"] == event["org_id"]), None)
+            if membership and membership["role"] == "usher":
+                grant = self.db.one(
+                    "SELECT role FROM event_grants WHERE event_id = ? AND org_id = ? AND user_id = ?",
+                    (event_id, event["org_id"], user["id"]),
+                )
+                membership = {**membership, "role": grant["role"]} if grant else None
         if not event or not membership:
             raise HTTPException(404, "Event was not found")
         if permission not in PERMISSIONS.get(membership["role"], set()):
@@ -201,6 +207,8 @@ class Auth:
     def create_invite(self, org_id: str, role: str, email: str, created_by: int, event_id: str | None, days: int = 7) -> str:
         if role not in ("admin", "usher"):
             raise HTTPException(400, "Invite an admin or an usher.")
+        if role == "usher" and not event_id:
+            raise HTTPException(400, "Choose the event this usher may access.")
         token = secrets.token_urlsafe(24)
         expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
         self.db.execute(
@@ -231,6 +239,13 @@ class Auth:
             self.db.execute(
                 "INSERT INTO memberships(org_id, user_id, role, created_at) VALUES (?, ?, ?, ?)",
                 (invite["org_id"], user["id"], invite["role"], now()),
+            )
+        elif existing["role"] != invite["role"] and invite["role"] != "usher":
+            raise HTTPException(409, "This account already has a different role in the organisation.")
+        if invite["role"] == "usher" and invite["event_id"]:
+            self.db.execute(
+                "INSERT OR REPLACE INTO event_grants(event_id, org_id, user_id, role, created_at) VALUES (?, ?, ?, 'usher', ?)",
+                (invite["event_id"], invite["org_id"], user["id"], now()),
             )
         changed = self.db.update(
             "UPDATE invites SET accepted_at = ?, accepted_by = ? WHERE id = ? AND accepted_at IS NULL",

@@ -38,6 +38,16 @@ def test_delete_needs_the_exact_name_and_an_ended_event(owner, event):
     assert owner.get(f"/api/events/{event['id']}").status_code == 404
 
 
+def test_event_with_received_money_must_be_archived_not_deleted(owner, event):
+    guest = add_guest(owner, event["id"])
+    pledge_id = add_pledge(event["id"], guest, amount=10_000)
+    database.execute("UPDATE pledges SET received_minor = 10000 WHERE id = ?", (pledge_id,))
+    lifecycle(owner, event["id"], "end")
+    response = owner.post(f"/api/events/{event['id']}/delete", {"confirm_name": event["name"]})
+    assert response.status_code == 409
+    assert owner.get(f"/api/events/{event['id']}").status_code == 200
+
+
 def test_listening_requires_a_live_event(owner, event):
     response = owner.post(f"/api/events/{event['id']}/upload", files={"file": ("a.wav", b"RIFF", "audio/wav")})
     assert response.status_code == 409

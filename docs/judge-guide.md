@@ -1,4 +1,4 @@
-# Trying Pledgebook
+# Operator walkthrough
 
 Open **https://pledgebook.54-154-121-30.sslip.io/**. Everything below takes
 about five minutes. AssemblyAI processes real human speech; payments use
@@ -8,7 +8,7 @@ Paystack **test mode**, so no real money moves.
    password of at least 10 characters, and any organisation name. You are its
    owner.
 2. **Start a sample event.** On *My events* choose *Practice with a sample
-   event*. It has three invented guests and deletes itself after 24 hours.
+   event*. It has nine invented guests and deletes itself after 24 hours.
    (A real event starts empty: *New event*.)
 3. **Add yourself as a guest.** Open *Guests*, add your name with a phone number
    and email, and tick the follow-up consent box.

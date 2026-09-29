@@ -184,6 +184,7 @@ function renderLanding() {
         <div class="hero-proof"><span>${icon('shield')} Nothing credited on a guess</span><span>${icon('wave')} Audio evidence for every line</span><span>${icon('wallet')} Part payments welcome</span></div>
       </div>
       <div class="preview" aria-label="An illustration of a live launching in Pledgebook" role="img">
+        <span class="chip gold">Illustrative preview</span>
         <div class="pv-top"><span>Harvest Thanksgiving Launching</span><span class="pv-live"><i></i> Listening</span></div>
         <div class="pv-total"><small>Pledged so far</small><span id="pv-total" class="num">₦1,250,000</span></div>
         <div class="pv-bar"><span id="pv-bar"></span></div>
@@ -196,7 +197,7 @@ function renderLanding() {
     <section class="section alt" id="how">
       <div class="section-head"><span class="eyebrow">How it works</span><h2>From a shout across the hall to money in the account.</h2><p>Speech does not become financial truth just because it was heard once. Every pledge passes two independent listens, and anything uncertain goes to a person.</p></div>
       <div class="steps">
-        <div class="step"><div class="tile">${icon('mic')}</div><h3>Realtime hears the room</h3><p>The MC's microphone streams to AssemblyAI Realtime with your guest list as key terms. Each pledge is on screen in about two seconds.</p></div>
+        <div class="step"><div class="tile">${icon('mic')}</div><h3>Realtime hears the room</h3><p>The MC's microphone streams to AssemblyAI Realtime with your guest list as key terms. Provisional words appear as the service returns them.</p></div>
         <div class="step"><div class="tile">${icon('rotate')}</div><h3>Sync rechecks the clip</h3><p>The exact seconds of speech are rechecked independently with word timings. Agreement confirms the line; disagreement stops it.</p></div>
         <div class="step"><div class="tile">${icon('users')}</div><h3>Ushers settle doubts</h3><p>Unknown names, two amounts in one breath, repeats — an usher listens to the clip on their phone and decides. The name is learned for its next mention.</p></div>
         <div class="step"><div class="tile">${icon('wallet')}</div><h3>Guests pay their way</h3><p>Each guest gets a private page to hear their moment, pay all or part with Paystack, pick a date, or say something is wrong.</p></div>

@@ -73,6 +73,8 @@ async def protect_requests(request: Request, call_next):
     response.headers.setdefault("Referrer-Policy", "no-referrer")
     response.headers.setdefault("X-Frame-Options", "DENY")
     response.headers.setdefault("Permissions-Policy", "microphone=(self), camera=()")
+    if settings.secure_cookies:
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
     if path.startswith("/api/"):
         response.headers.setdefault("Cache-Control", "no-store")
     return response
@@ -346,6 +348,7 @@ async def remove_member(user_id: int, request: Request):
     if member["role"] == "owner" and owner_count(user["org_id"]) <= 1:
         raise HTTPException(400, "An organisation needs at least one owner.")
     database.execute("DELETE FROM memberships WHERE org_id = ? AND user_id = ?", (user["org_id"], user_id))
+    database.execute("DELETE FROM event_grants WHERE org_id = ? AND user_id = ?", (user["org_id"], user_id))
     database.execute("UPDATE sessions SET org_id = NULL WHERE user_id = ? AND org_id = ?", (user_id, user["org_id"]))
     return {"ok": True}
 
@@ -379,11 +382,16 @@ async def list_events(request: Request, view: str = "active", q: str = ""):
     filters = {"active": "status IN ('setup', 'live', 'paused')", "ended": "status = 'ended'", "archived": "status = 'archived'"}
     where = filters.get(view, filters["active"])
     params: list = [user["org_id"]]
+    scope = ""
+    if user["role"] == "usher":
+        scope = " AND id IN (SELECT event_id FROM event_grants WHERE org_id = ? AND user_id = ?)"
+        params += [user["org_id"], user["id"]]
     if q.strip():
         where += " AND (name LIKE ? OR organisation LIKE ?)"
         params += [f"%{q.strip()}%", f"%{q.strip()}%"]
-    rows = database.all(f"SELECT * FROM events WHERE org_id = ? AND {where} ORDER BY event_date DESC, created_at DESC", tuple(params))
-    counts = {key: database.one(f"SELECT COUNT(*) AS n FROM events WHERE org_id = ? AND {value}", (user["org_id"],))["n"] for key, value in filters.items()}
+    rows = database.all(f"SELECT * FROM events WHERE org_id = ?{scope} AND {where} ORDER BY event_date DESC, created_at DESC", tuple(params))
+    count_params = (user["org_id"], user["org_id"], user["id"]) if scope else (user["org_id"],)
+    counts = {key: database.one(f"SELECT COUNT(*) AS n FROM events WHERE org_id = ?{scope} AND {value}", count_params)["n"] for key, value in filters.items()}
     return {"events": [event_summary(row) for row in rows], "counts": counts,
             "sample_recording": sample_recording_available()}
 
@@ -486,8 +494,8 @@ async def delete_event(event_id: str, payload: DeleteRequest, request: Request):
     if event["status"] == "live":
         raise HTTPException(409, "End the event before deleting it.")
     received = database.one("SELECT COALESCE(SUM(received_minor), 0) AS n FROM pledges WHERE event_id = ?", (event_id,))["n"]
-    if received and member["role"] != "owner":
-        raise HTTPException(403, "This event has received payments. Only an owner can delete it.")
+    if received:
+        raise HTTPException(409, "This event has received payments and must be archived, not deleted.")
     await stop_live_captures(event_id, "The event was deleted.")
     delete_event_data(event_id)
     return {"ok": True}

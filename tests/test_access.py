@@ -56,6 +56,17 @@ def test_usher_invite_gives_review_access_without_contacts(owner, event):
     assert Client().post("/api/auth/signup", {"name": "B", "email": "b@example.com", "password": "long enough password", "invite": token}).status_code == 410
 
 
+def test_usher_is_scoped_to_the_invited_event(owner, event):
+    other = owner.post("/api/events", {"name": "Private second event", "event_date": "2026-10-05"}).json()["event"]
+    invite = owner.post("/api/organisation/invites", {"role": "usher", "event_id": event["id"]}).json()
+    usher = new_account(invite=invite["url"].rsplit("/", 1)[-1], name="Scoped Usher")
+    assert usher.get(f"/api/events/{event['id']}").status_code == 200
+    assert usher.get(f"/api/events/{other['id']}").status_code == 404
+    listed = usher.get("/api/events").json()
+    assert [row["id"] for row in listed["events"]] == [event["id"]]
+    assert listed["counts"]["active"] == 1
+
+
 def test_only_owners_invite_admins(owner, event):
     admin_invite = owner.post("/api/organisation/invites", {"role": "admin"}).json()
     admin = new_account(invite=admin_invite["url"].rsplit("/", 1)[-1])
@@ -80,3 +91,4 @@ def test_security_headers_are_sent():
     response = Client().get("/")
     assert "frame-ancestors 'none'" in response.headers["content-security-policy"]
     assert response.headers["referrer-policy"] == "no-referrer"
+    assert response.headers["strict-transport-security"].startswith("max-age=31536000")

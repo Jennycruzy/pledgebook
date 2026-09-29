@@ -175,6 +175,11 @@ async def record_offline_payment(event_id: str, pledge_id: int, payload: Offline
         raise HTTPException(400, "Only a confirmed pledge can receive payments.")
     if pledge["item"]:
         raise HTTPException(400, "This is an in-kind gift. Mark it received from the register instead.")
+    outstanding = int(pledge["amount_minor"] or 0) - int(pledge.get("received_minor") or 0)
+    if outstanding <= 0:
+        raise HTTPException(409, "This pledge has already been paid in full.")
+    if payload.amount > outstanding:
+        raise HTTPException(400, f"Enter no more than the outstanding ₦{outstanding:,}.")
     reference = f"offline-{payload.method}-{uuid.uuid4().hex[:12]}"
     payment_id = database.execute(
         "INSERT INTO payments(event_id, pledge_id, reference, amount_kobo, email, authorization_url, status, paystack_status, payload_json, created_at, updated_at) "

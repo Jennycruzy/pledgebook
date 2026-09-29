@@ -91,6 +91,17 @@ def test_offline_payment_is_recorded_by_staff(owner, event):
     assert pledge(pledge_id)["state"] == "redeemed"
 
 
+def test_offline_payment_cannot_exceed_or_recredit_the_balance(owner, event):
+    pledge_id, _ = open_page(owner, event, amount=30_000)
+    url = f"/api/events/{event['id']}/pledges/{pledge_id}/payments/offline"
+    assert owner.post(url, {"amount": 30_001, "method": "cash"}).status_code == 400
+    assert owner.post(url, {"amount": 20_000, "method": "cash"}).status_code == 200
+    assert owner.post(url, {"amount": 10_001, "method": "cash"}).status_code == 400
+    assert owner.post(url, {"amount": 10_000, "method": "cash"}).status_code == 200
+    assert owner.post(url, {"amount": 1, "method": "cash"}).status_code == 409
+    assert pledge(pledge_id)["received_minor"] == 30_000
+
+
 def test_guest_can_promise_dispute_or_stop(owner, event):
     pledge_id, token = open_page(owner, event)
     guest = Client()

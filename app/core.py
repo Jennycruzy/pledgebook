@@ -233,6 +233,7 @@ def event_state(event_id: str, role: str = "owner") -> dict:
 
 
 def delete_event_data(event_id: str) -> None:
+    database.execute("DELETE FROM event_grants WHERE event_id = ?", (event_id,))
     for table in ("deliveries", "pledge_links", "payments", "calls", "audit_log", "pledges", "guests"):
         database.execute(f"DELETE FROM {table} WHERE event_id = ?", (event_id,))
     database.execute("DELETE FROM invites WHERE event_id = ?", (event_id,))

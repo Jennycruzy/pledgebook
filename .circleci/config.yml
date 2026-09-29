@@ -8,7 +8,7 @@ jobs:
       - checkout
       - run:
           name: Install Python dependencies
-          command: python -m pip install --upgrade pip && python -m pip install -r requirements.txt pytest
+          command: python -m pip install --upgrade pip && python -m pip install -r requirements-dev.txt
       - run:
           name: Run Python tests
           command: python -m pytest -q
