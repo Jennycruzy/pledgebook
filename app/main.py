@@ -1,1271 +1,1097 @@
 from __future__ import annotations
 
 import asyncio
-from array import array
+from contextlib import asynccontextmanager
 import csv
-from datetime import date, datetime, timedelta, timezone
-import html
+from datetime import date
 import io
 import json
 from pathlib import Path
 import re
-import secrets
-import shutil
-import sys
 import uuid
-import wave
 
-from fastapi import FastAPI, File, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
+from fastapi import FastAPI, File, HTTPException, Request, Response, UploadFile, WebSocket, WebSocketDisconnect
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from pydantic import BaseModel, Field
+import segno
 
-from .amounts import parse_amount
-from .config import Settings
-from .db import Database, now
-from .extractor import TurnWindow, extract_turn
-from .names import match_name
-from .payments import PaystackError, initialize_transaction, valid_webhook_signature, verify_transaction
-from .services import AssemblyAIError, open_realtime, paced_pcm16, sync_transcribe, voice_token
+from . import followup
+from .auth import PERMISSIONS, SESSION_COOKIE, SESSION_DAYS, client_ip, limiter, validate_email
+from .capture import ListeningSession, normalise_wav, process_uploaded_audio, stop_live_captures, update_live_listening_terms
+from .core import (ACCEPTED_STATES, add_usage, apply_retention, auth, database, delete_event_data, event_state, guest_label,
+                   guests_for, hub, organisation, require_usage, safe_data_path, settings, usage_limits,
+                   usage_today)
+from .db import now
+from .delivery import phone_digits, valid_phone
+from .names import normalize_name
+from .sample import create_sample_event, sample_recording_available
 
 
 ROOT = Path(__file__).resolve().parents[1]
-settings = Settings.load()
-database = Database(settings.data_dir / "pledgebook.sqlite3")
-app = FastAPI(title="Pledgebook", version="0.1.0")
-
-DEMO_AUDIO_LIMIT_SECONDS = 180
-DEMO_CALL_LIMIT = 2
-DEMO_DAILY_LIMIT = 25
-DEMO_RETENTION_HOURS = 24
-
-# One event can have one or more capture tabs. Each connection has a lock so
-# an usher's listening-list update cannot interleave with an audio frame.
-live_sessions: dict[str, dict[object, asyncio.Lock]] = {}
-cleanup_task: asyncio.Task | None = None
-
+WEB = ROOT / "web"
+UPLOAD_LIMIT_SECONDS = 120
 
 async def cleanup_loop() -> None:
     while True:
+        try:
+            apply_retention()
+        except Exception as exc:  # keep the loop alive; the next hour retries
+            print(f"retention check failed: {exc}")
         await asyncio.sleep(3600)
-        purge_expired_demo_events()
 
 
-@app.on_event("startup")
-async def start_cleanup_loop() -> None:
-    global cleanup_task
-    cleanup_task = asyncio.create_task(cleanup_loop())
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    task = asyncio.create_task(cleanup_loop())
+    yield
+    task.cancel()
+    await asyncio.gather(task, return_exceptions=True)
 
 
-@app.on_event("shutdown")
-async def stop_cleanup_loop() -> None:
-    global cleanup_task
-    if cleanup_task:
-        cleanup_task.cancel()
-        await asyncio.gather(cleanup_task, return_exceptions=True)
-        cleanup_task = None
+app = FastAPI(title="Pledgebook", version="0.2.0", docs_url=None, redoc_url=None, openapi_url=None, lifespan=lifespan)
+app.include_router(followup.router)
+
+
+CONTENT_POLICY = (
+    "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+    "media-src 'self' blob:; connect-src 'self' wss://agents.assemblyai.com; frame-ancestors 'none'; "
+    "base-uri 'none'; form-action 'self'"
+)
+
+
+@app.middleware("http")
+async def protect_requests(request: Request, call_next):
+    # Browsers cannot add a custom header to a cross-site form post, so
+    # requiring one on every write blocks cross-site request forgery.
+    path = request.url.path
+    if (request.method not in ("GET", "HEAD", "OPTIONS") and path.startswith("/api/")
+            and path != "/api/paystack/webhook" and request.headers.get("x-pledgebook") != "1"):
+        return JSONResponse(status_code=403, content={"detail": "This request was blocked because it did not come from Pledgebook."})
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", CONTENT_POLICY)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Permissions-Policy", "microphone=(self), camera=()")
+    if path.startswith("/api/"):
+        response.headers.setdefault("Cache-Control", "no-store")
+    return response
+
+
+@app.exception_handler(RuntimeError)
+async def runtime_error(_, exc: RuntimeError):
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+# ------------------------------------------------------------------ pages
+
+
+def page(name: str) -> FileResponse:
+    return FileResponse(WEB / name, headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@app.get("/")
+async def index():
+    return page("index.html")
+
+
+@app.get("/pay/{token}")
+async def pledge_page(token: str):
+    return page("pay.html")
+
+
+@app.get("/static/{path:path}")
+async def static_file(path: str):
+    file = (WEB / path).resolve()
+    if WEB not in file.parents or not file.is_file():
+        raise HTTPException(404, "File was not found")
+    return FileResponse(file, headers={"Cache-Control": "no-cache, must-revalidate"})
+
+
+@app.get("/healthz")
+async def healthz():
+    return {"ok": True, "assemblyai_configured": bool(settings.assemblyai_api_key),
+            "payments": settings.paystack_mode, "email": settings.email_configured, "version": app.version}
+
+
+# --------------------------------------------------------------- accounts
+
+
+def set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(SESSION_COOKIE, token, max_age=SESSION_DAYS * 86400, httponly=True,
+                        secure=settings.secure_cookies, samesite="lax", path="/")
+
+
+class SignupRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=120)
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+    organisation: str = Field(default="", max_length=160)
+    invite: str = Field(default="", max_length=200)
+
+
+@app.post("/api/auth/signup")
+async def signup(payload: SignupRequest, request: Request, response: Response):
+    limiter.check(client_ip(request), "signup", 5, 3600)
+    invite = auth.open_invite(payload.invite) if payload.invite else None
+    if not invite and not payload.organisation.strip():
+        raise HTTPException(400, "Enter your organisation's name.")
+    user = auth.create_user(payload.email, payload.name, payload.password)
+    if invite:
+        auth.accept_invite(payload.invite, user)
+        org_id = invite["org_id"]
+    else:
+        org_id = auth.create_organisation(payload.organisation, user["id"])
+    token, _ = auth.start_session(user["id"], org_id)
+    set_session_cookie(response, token)
+    return {"ok": True, "event_id": invite["event_id"] if invite else None}
+
+
+class LoginRequest(BaseModel):
+    email: str = Field(min_length=3, max_length=200)
+    password: str = Field(min_length=1, max_length=200)
+    invite: str = Field(default="", max_length=200)
+
+
+@app.post("/api/auth/login")
+async def login(payload: LoginRequest, request: Request, response: Response):
+    limiter.check(client_ip(request), "login", 10, 900)
+    limiter.check(payload.email.strip().lower(), "login-account", 10, 900)
+    user = auth.authenticate(payload.email, payload.password)
+    event_id, org_id = None, None
+    if payload.invite:
+        invite = auth.accept_invite(payload.invite, {"id": user["id"], "email": user["email"]})
+        event_id, org_id = invite["event_id"], invite["org_id"]
+    token, _ = auth.start_session(user["id"], org_id)
+    set_session_cookie(response, token)
+    return {"ok": True, "event_id": event_id}
+
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, response: Response):
+    auth.end_session(request.cookies.get(SESSION_COOKIE))
+    response.delete_cookie(SESSION_COOKIE, path="/")
+    return {"ok": True}
+
+
+def me_view(user: dict) -> dict:
+    return {"user": {"id": user["id"], "name": user["name"], "email": user["email"]},
+            "organisation": {"id": user["org_id"], "name": user["org_name"], "role": user["role"]} if user["org_id"] else None,
+            "memberships": [{"id": m["org_id"], "name": m["name"], "role": m["role"]} for m in user["memberships"]],
+            "permissions": sorted(PERMISSIONS.get(user["role"], set()))}
+
+
+@app.get("/api/me")
+async def me(request: Request):
+    user = auth.user_from_request(request)
+    if not user:
+        return JSONResponse(status_code=401, content={"detail": "Sign in to continue."})
+    return me_view(user)
+
+
+class SwitchOrg(BaseModel):
+    org_id: str
+
+
+@app.post("/api/me/organisation")
+async def switch_organisation(payload: SwitchOrg, request: Request):
+    user = auth.require_user(request)
+    if not any(m["org_id"] == payload.org_id for m in user["memberships"]):
+        raise HTTPException(404, "Organisation was not found")
+    auth.set_session_org(user["token"], payload.org_id)
+    return me_view(auth.require_user(request))
+
+
+@app.get("/api/invites/{token}")
+async def invite_details(token: str, request: Request):
+    limiter.check(client_ip(request), "invite", 30, 600)
+    invite = auth.open_invite(token)
+    return {"organisation": invite["org_name"], "role": invite["role"], "email": invite["email"]}
+
+
+@app.post("/api/invites/{token}/accept")
+async def accept_invite(token: str, request: Request):
+    user = auth.require_user(request)
+    invite = auth.accept_invite(token, user)
+    auth.set_session_org(user["token"], invite["org_id"])
+    return {"ok": True, "event_id": invite["event_id"]}
+
+
+# ----------------------------------------------------------- organisation
+
+
+class OrgUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=160)
+    retention_days: int = Field(ge=7, le=3650)
+    link_expiry_days: int = Field(ge=1, le=90)
+
+
+def org_view(org_id: str) -> dict:
+    org = organisation(org_id)
+    return {
+        "organisation": {key: org.get(key) for key in ("id", "name", "currency", "retention_days", "link_expiry_days", "created_at")},
+        "payments": {"mode": settings.paystack_mode,
+                     "webhook_url": f"{settings.public_url}/api/paystack/webhook" if settings.public_url else "/api/paystack/webhook"},
+        "email": {"configured": settings.email_configured, "from": settings.smtp_from if settings.email_configured else ""},
+        "usage": {"used": usage_today(org_id), "limits": usage_limits()},
+    }
+
+
+@app.get("/api/organisation")
+async def get_organisation(request: Request):
+    user = auth.require_org(request, "view")
+    return org_view(user["org_id"])
+
+
+@app.patch("/api/organisation")
+async def update_organisation(payload: OrgUpdate, request: Request):
+    user = auth.require_org(request, "settings")
+    database.execute("UPDATE organisations SET name = ?, retention_days = ?, link_expiry_days = ? WHERE id = ?",
+                     (payload.name.strip(), payload.retention_days, payload.link_expiry_days, user["org_id"]))
+    return org_view(user["org_id"])
+
+
+@app.get("/api/organisation/staff")
+async def staff(request: Request):
+    user = auth.require_org(request, "staff")
+    members = database.all(
+        "SELECT u.id, u.name, u.email, m.role, m.created_at FROM memberships m JOIN users u ON u.id = m.user_id WHERE m.org_id = ? ORDER BY m.created_at",
+        (user["org_id"],),
+    )
+    invites = database.all(
+        "SELECT i.id, i.email, i.role, i.event_id, i.created_at, i.expires_at, e.name AS event_name FROM invites i "
+        "LEFT JOIN events e ON e.id = i.event_id WHERE i.org_id = ? AND i.accepted_at IS NULL AND i.revoked_at IS NULL AND i.expires_at > ? ORDER BY i.id DESC",
+        (user["org_id"], now()),
+    )
+    return {"members": members, "invites": invites}
+
+
+class InviteRequest(BaseModel):
+    role: str = Field(pattern="^(admin|usher)$")
+    email: str = Field(default="", max_length=200)
+    event_id: str = ""
+
+
+def invite_url(token: str) -> str:
+    return f"{settings.public_url}/#/invite/{token}" if settings.public_url else f"/#/invite/{token}"
+
+
+def qr_svg(data: str) -> str:
+    return segno.make(data, error="m").svg_inline(scale=5, border=2, dark="#17211b", light="#ffffff")
+
+
+@app.post("/api/organisation/invites")
+async def create_invite(payload: InviteRequest, request: Request):
+    # Admins may invite ushers for an event they run; only owners invite admins.
+    user = auth.require_org(request, "staff" if payload.role == "admin" else "run")
+    email = validate_email(payload.email) if payload.email.strip() else ""
+    event_id = None
+    if payload.event_id:
+        event, _ = auth.require_event(request, payload.event_id, "run")
+        event_id = event["id"]
+    token = auth.create_invite(user["org_id"], payload.role, email, user["id"], event_id)
+    url = invite_url(token)
+    emailed = False
+    if email and settings.email_configured:
+        from .delivery import send_email
+        try:
+            require_usage(user["org_id"], "emails_sent")
+            await send_email(settings, email, f"Join {user['org_name']} on Pledgebook",
+                             f"{user['name']} invited you to help as {payload.role} for {user['org_name']}.\n\nAccept here: {url}\n\nThis invitation expires in 7 days.")
+            add_usage(user["org_id"], "emails_sent", 1)
+            emailed = True
+        except Exception:
+            emailed = False
+    if event_id:
+        database.audit(event_id, "staff_invited", {"role": payload.role, "email": email}, actor=user)
+    return {"url": url, "qr_svg": qr_svg(url), "emailed": emailed, "role": payload.role}
+
+
+@app.delete("/api/organisation/invites/{invite_id}")
+async def revoke_invite(invite_id: int, request: Request):
+    user = auth.require_org(request, "run")
+    changed = database.update("UPDATE invites SET revoked_at = ? WHERE id = ? AND org_id = ? AND accepted_at IS NULL",
+                              (now(), invite_id, user["org_id"]))
+    if not changed:
+        raise HTTPException(404, "Invitation was not found")
+    return {"ok": True}
+
+
+class RoleUpdate(BaseModel):
+    role: str = Field(pattern="^(owner|admin|usher)$")
+
+
+def owner_count(org_id: str) -> int:
+    return database.one("SELECT COUNT(*) AS n FROM memberships WHERE org_id = ? AND role = 'owner'", (org_id,))["n"]
+
+
+@app.patch("/api/organisation/members/{user_id}")
+async def change_role(user_id: int, payload: RoleUpdate, request: Request):
+    user = auth.require_org(request, "staff")
+    member = database.one("SELECT role FROM memberships WHERE org_id = ? AND user_id = ?", (user["org_id"], user_id))
+    if not member:
+        raise HTTPException(404, "Member was not found")
+    if member["role"] == "owner" and payload.role != "owner" and owner_count(user["org_id"]) <= 1:
+        raise HTTPException(400, "An organisation needs at least one owner.")
+    database.execute("UPDATE memberships SET role = ? WHERE org_id = ? AND user_id = ?", (payload.role, user["org_id"], user_id))
+    return {"ok": True}
+
+
+@app.delete("/api/organisation/members/{user_id}")
+async def remove_member(user_id: int, request: Request):
+    user = auth.require_org(request, "staff")
+    member = database.one("SELECT role FROM memberships WHERE org_id = ? AND user_id = ?", (user["org_id"], user_id))
+    if not member:
+        raise HTTPException(404, "Member was not found")
+    if member["role"] == "owner" and owner_count(user["org_id"]) <= 1:
+        raise HTTPException(400, "An organisation needs at least one owner.")
+    database.execute("DELETE FROM memberships WHERE org_id = ? AND user_id = ?", (user["org_id"], user_id))
+    database.execute("UPDATE sessions SET org_id = NULL WHERE user_id = ? AND org_id = ?", (user_id, user["org_id"]))
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------- events
 
 
 class EventCreate(BaseModel):
     name: str = Field(min_length=1, max_length=160)
-    organisation: str = Field(default="Grace Assembly", min_length=1, max_length=160)
-    event_date: str = Field(default_factory=lambda: date.today().isoformat())
+    organisation: str = Field(default="", max_length=160)
+    event_date: str = Field(default_factory=lambda: date.today().isoformat(), pattern=r"^\d{4}-\d{2}-\d{2}$")
     target: int = Field(default=0, ge=0)
     minimum: int = Field(default=0, ge=0)
     maximum: int = Field(default=0, ge=0)
-    demo: bool = False
 
 
-class GuestCreate(BaseModel):
-    title: str = ""
+def event_summary(event: dict) -> dict:
+    totals = database.one(
+        "SELECT COUNT(*) AS pledges, COALESCE(SUM(CASE WHEN state != 'rejected' AND item IS NULL AND COALESCE(currency, 'NGN') = 'NGN' THEN amount_minor END), 0) AS pledged, "
+        "COALESCE(SUM(received_minor), 0) AS received, SUM(state = 'flagged') AS flags FROM pledges WHERE event_id = ?",
+        (event["id"],),
+    )
+    guests = database.one("SELECT COUNT(*) AS n FROM guests WHERE event_id = ? AND removed_at IS NULL", (event["id"],))["n"]
+    return {key: event.get(key) for key in ("id", "name", "organisation", "event_date", "status", "sample", "created_at", "ended_at", "archived_at", "expires_at", "target_minor")} | {
+        "pledges": totals["pledges"], "pledged": totals["pledged"], "received": totals["received"], "flags": totals["flags"] or 0, "guests": guests}
+
+
+@app.get("/api/events")
+async def list_events(request: Request, view: str = "active", q: str = ""):
+    user = auth.require_org(request, "view")
+    filters = {"active": "status IN ('setup', 'live', 'paused')", "ended": "status = 'ended'", "archived": "status = 'archived'"}
+    where = filters.get(view, filters["active"])
+    params: list = [user["org_id"]]
+    if q.strip():
+        where += " AND (name LIKE ? OR organisation LIKE ?)"
+        params += [f"%{q.strip()}%", f"%{q.strip()}%"]
+    rows = database.all(f"SELECT * FROM events WHERE org_id = ? AND {where} ORDER BY event_date DESC, created_at DESC", tuple(params))
+    counts = {key: database.one(f"SELECT COUNT(*) AS n FROM events WHERE org_id = ? AND {value}", (user["org_id"],))["n"] for key, value in filters.items()}
+    return {"events": [event_summary(row) for row in rows], "counts": counts,
+            "sample_recording": sample_recording_available()}
+
+
+@app.post("/api/events")
+async def create_event(payload: EventCreate, request: Request):
+    user = auth.require_org(request, "run")
+    require_usage(user["org_id"], "events_created")
+    if payload.maximum and payload.minimum > payload.maximum:
+        raise HTTPException(400, "The minimum cannot be above the maximum.")
+    event_id = uuid.uuid4().hex
+    database.execute(
+        "INSERT INTO events(id, name, organisation, event_date, target_minor, min_minor, max_minor, demo, sample, status, created_at, org_id, created_by) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, 'setup', ?, ?, ?)",
+        (event_id, payload.name.strip(), payload.organisation.strip() or user["org_name"], payload.event_date,
+         payload.target, payload.minimum, payload.maximum, now(), user["org_id"], user["id"]),
+    )
+    add_usage(user["org_id"], "events_created", 1)
+    database.audit(event_id, "event_created", {"name": payload.name.strip()}, actor=user)
+    return event_state(event_id, user["role"])
+
+
+@app.post("/api/events/sample")
+async def create_sample(request: Request):
+    user = auth.require_org(request, "run")
+    require_usage(user["org_id"], "events_created")
+    return event_state(create_sample_event(user["org_id"], user), user["role"])
+
+
+@app.get("/api/events/{event_id}")
+async def get_event(event_id: str, request: Request):
+    event, member = auth.require_event(request, event_id, "view")
+    return event_state(event_id, member["role"])
+
+
+class EventUpdate(EventCreate):
+    pass
+
+
+@app.patch("/api/events/{event_id}")
+async def update_event(event_id: str, payload: EventUpdate, request: Request):
+    event, member = auth.require_event(request, event_id, "run")
+    database.execute(
+        "UPDATE events SET name = ?, organisation = ?, event_date = ?, target_minor = ?, min_minor = ?, max_minor = ? WHERE id = ?",
+        (payload.name.strip(), payload.organisation.strip() or event["organisation"], payload.event_date,
+         payload.target, payload.minimum, payload.maximum, event_id),
+    )
+    database.audit(event_id, "event_details_changed", payload.model_dump(), actor=member)
+    await hub.publish(event_id, {"type": "changed"})
+    return event_state(event_id, member["role"])
+
+
+# Allowed lifecycle moves: action -> (states it may start from, new state).
+LIFECYCLE = {
+    "start": (("setup",), "live"),
+    "pause": (("live",), "paused"),
+    "resume": (("paused",), "live"),
+    "end": (("setup", "live", "paused"), "ended"),
+    "reopen": (("ended",), "paused"),
+    "archive": (("ended",), "archived"),
+    "unarchive": (("archived",), "ended"),
+}
+
+
+class LifecycleRequest(BaseModel):
+    action: str
+
+
+@app.post("/api/events/{event_id}/lifecycle")
+async def change_lifecycle(event_id: str, payload: LifecycleRequest, request: Request):
+    event, member = auth.require_event(request, event_id, "run")
+    if payload.action not in LIFECYCLE:
+        raise HTTPException(400, "Unknown event action")
+    allowed_from, target = LIFECYCLE[payload.action]
+    if event["status"] not in allowed_from:
+        raise HTTPException(409, f"An event that is {event['status']} cannot {payload.action}.")
+    stamp = now()
+    columns = {"start": "started_at = ?", "pause": "paused_at = ?", "resume": "paused_at = NULL, started_at = COALESCE(started_at, ?)",
+               "end": "ended_at = ?", "reopen": "ended_at = NULL, paused_at = ?", "archive": "archived_at = ?", "unarchive": "archived_at = NULL, ended_at = COALESCE(ended_at, ?)"}
+    changed = database.update(f"UPDATE events SET status = ?, {columns[payload.action]} WHERE id = ? AND status = ?",
+                              (target, stamp, event_id, event["status"]))
+    if not changed:
+        raise HTTPException(409, "The event changed at the same time. Refresh and try again.")
+    if target in ("paused", "ended"):
+        await stop_live_captures(event_id, "The event was paused." if target == "paused" else "The event has ended.")
+    database.audit(event_id, f"event_{payload.action}", {"from": event["status"], "to": target}, actor=member)
+    await hub.publish(event_id, {"type": "changed"})
+    return event_state(event_id, member["role"])
+
+
+class DeleteRequest(BaseModel):
+    confirm_name: str
+
+
+@app.post("/api/events/{event_id}/delete")
+async def delete_event(event_id: str, payload: DeleteRequest, request: Request):
+    event, member = auth.require_event(request, event_id, "run")
+    if payload.confirm_name.strip() != event["name"].strip():
+        raise HTTPException(400, "Type the event name exactly to delete it.")
+    if event["status"] == "live":
+        raise HTTPException(409, "End the event before deleting it.")
+    received = database.one("SELECT COALESCE(SUM(received_minor), 0) AS n FROM pledges WHERE event_id = ?", (event_id,))["n"]
+    if received and member["role"] != "owner":
+        raise HTTPException(403, "This event has received payments. Only an owner can delete it.")
+    await stop_live_captures(event_id, "The event was deleted.")
+    delete_event_data(event_id)
+    return {"ok": True}
+
+
+# ----------------------------------------------------------------- guests
+
+
+class GuestFields(BaseModel):
+    title: str = Field(default="", max_length=40)
     name: str = Field(min_length=1, max_length=160)
-    phone: str = ""
-    email: str = ""
+    phone: str = Field(default="", max_length=40)
+    email: str = Field(default="", max_length=200)
     consent_to_contact: bool = False
-    group: str = ""
+    group: str = Field(default="", max_length=80)
+
+
+def clean_guest(fields: dict) -> tuple[dict, list[str]]:
+    guest = {
+        "title": str(fields.get("title") or "").strip()[:40],
+        "name": re.sub(r"\s+", " ", str(fields.get("name") or "")).strip()[:160],
+        "phone": str(fields.get("phone") or "").strip()[:40],
+        "email": str(fields.get("email") or "").strip().lower()[:200],
+        "consent_to_contact": bool(fields.get("consent_to_contact")),
+        "group": str(fields.get("group") or "").strip()[:80],
+    }
+    problems = []
+    if not guest["name"]:
+        problems.append("Name is missing.")
+    if guest["phone"] and not valid_phone(guest["phone"]):
+        problems.append("Phone number does not look right.")
+    if guest["email"] and not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", guest["email"]):
+        problems.append("Email address does not look right.")
+    return guest, problems
+
+
+def duplicate_of(guest: dict, existing: list[dict], skip_id: int | None = None) -> dict | None:
+    name = normalize_name(guest["name"])
+    phone = phone_digits(guest["phone"]) if guest["phone"] else ""
+    for other in existing:
+        if skip_id is not None and other["id"] == skip_id:
+            continue
+        if name and normalize_name(other["name"]) == name:
+            return other
+        if phone and other.get("phone") and phone_digits(other["phone"]) == phone:
+            return other
+        if guest["email"] and other.get("email") and other["email"].lower() == guest["email"]:
+            return other
+    return None
+
+
+def insert_guest(event_id: str, guest: dict) -> int:
+    return database.execute(
+        "INSERT INTO guests(event_id, title, name, phone, email, consent_to_contact, group_name, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (event_id, guest["title"], guest["name"], guest["phone"], guest["email"], int(guest["consent_to_contact"]), guest["group"], now(), now()),
+    )
+
+
+def editable(event: dict) -> None:
+    if event["status"] == "archived":
+        raise HTTPException(409, "Unarchive the event to change it.")
+
+
+@app.post("/api/events/{event_id}/guests")
+async def add_guest(event_id: str, payload: GuestFields, request: Request):
+    event, member = auth.require_event(request, event_id, "guests")
+    editable(event)
+    guest, problems = clean_guest(payload.model_dump())
+    if problems:
+        raise HTTPException(400, " ".join(problems))
+    duplicate = duplicate_of(guest, guests_for(event_id))
+    if duplicate:
+        raise HTTPException(409, f"{guest_label(duplicate)} is already on the guest list.")
+    guest_id = insert_guest(event_id, guest)
+    database.audit(event_id, "guest_added", {"guest_id": guest_id, "name": guest["name"], "consent_to_contact": guest["consent_to_contact"]}, actor=member)
+    await update_live_listening_terms(event_id)
+    await hub.publish(event_id, {"type": "changed"})
+    return database.one("SELECT * FROM guests WHERE id = ?", (guest_id,))
+
+
+@app.patch("/api/events/{event_id}/guests/{guest_id}")
+async def edit_guest(event_id: str, guest_id: int, payload: GuestFields, request: Request):
+    event, member = auth.require_event(request, event_id, "guests")
+    editable(event)
+    before = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ? AND removed_at IS NULL", (guest_id, event_id))
+    if not before:
+        raise HTTPException(404, "Guest was not found")
+    guest, problems = clean_guest(payload.model_dump())
+    if problems:
+        raise HTTPException(400, " ".join(problems))
+    duplicate = duplicate_of(guest, guests_for(event_id), skip_id=guest_id)
+    if duplicate:
+        raise HTTPException(409, f"{guest_label(duplicate)} already has that name, phone or email.")
+    database.execute(
+        "UPDATE guests SET title = ?, name = ?, phone = ?, email = ?, consent_to_contact = ?, group_name = ?, updated_at = ? WHERE id = ?",
+        (guest["title"], guest["name"], guest["phone"], guest["email"], int(guest["consent_to_contact"]), guest["group"], now(), guest_id),
+    )
+    changes = {}
+    for key, column in (("title", "title"), ("name", "name"), ("phone", "phone"), ("email", "email"), ("group", "group_name")):
+        if (before[column] or "") != guest[key]:
+            changes[key] = {"from": before[column], "to": guest[key]} if key not in ("phone", "email") else "changed"
+    if bool(before["consent_to_contact"]) != guest["consent_to_contact"]:
+        changes["consent_to_contact"] = guest["consent_to_contact"]
+    if guest["name"] != before["name"]:
+        database.execute("UPDATE pledges SET matched_name = ? WHERE guest_id = ?", (guest["name"], guest_id))
+    if not guest["consent_to_contact"] and before["consent_to_contact"]:
+        for pledge in database.all("SELECT id FROM pledges WHERE guest_id = ?", (guest_id,)):
+            followup.revoke_links(event_id, pledge["id"], "Follow-up consent withdrawn", member)
+    database.audit(event_id, "guest_edited", {"guest_id": guest_id, "changes": changes}, actor=member)
+    await update_live_listening_terms(event_id)
+    await hub.publish(event_id, {"type": "changed"})
+    return database.one("SELECT * FROM guests WHERE id = ?", (guest_id,))
+
+
+@app.delete("/api/events/{event_id}/guests/{guest_id}")
+async def remove_guest(event_id: str, guest_id: int, request: Request):
+    """Take a guest off the list. Pledges already made keep their name."""
+
+    event, member = auth.require_event(request, event_id, "guests")
+    editable(event)
+    changed = database.update("UPDATE guests SET removed_at = ?, updated_at = ? WHERE id = ? AND event_id = ? AND removed_at IS NULL",
+                              (now(), now(), guest_id, event_id))
+    if not changed:
+        raise HTTPException(404, "Guest was not found")
+    database.audit(event_id, "guest_removed", {"guest_id": guest_id}, actor=member)
+    await update_live_listening_terms(event_id)
+    await hub.publish(event_id, {"type": "changed"})
+    return {"ok": True}
+
+
+@app.get("/api/events/{event_id}/guests/{guest_id}/history")
+async def guest_history(event_id: str, guest_id: int, request: Request):
+    auth.require_event(request, event_id, "guests")
+    guest = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ?", (guest_id, event_id))
+    if not guest:
+        raise HTTPException(404, "Guest was not found")
+    pledges = database.all("SELECT id, amount_minor AS amount, currency, item, state, received_minor AS received, created_at FROM pledges WHERE guest_id = ? ORDER BY id", (guest_id,))
+    pledge_ids = [p["id"] for p in pledges]
+    marks = ",".join("?" * len(pledge_ids)) or "NULL"
+    rows = database.all(
+        f"SELECT id, action, details_json, actor_label, pledge_id, created_at FROM audit_log WHERE event_id = ? AND (guest_id = ? OR pledge_id IN ({marks})) ORDER BY id DESC LIMIT 200",
+        (event_id, guest_id, *pledge_ids),
+    )
+    return {"guest": guest, "pledges": pledges, "history": [activity_row(row) for row in rows]}
+
+
+GUEST_COLUMNS = ("title", "name", "phone", "email", "consent_to_contact", "group")
+
+
+def read_guest_csv(raw: bytes) -> list[dict]:
+    try:
+        text = raw.decode("utf-8-sig")
+    except UnicodeDecodeError as exc:
+        raise HTTPException(400, "Save the CSV as UTF-8 and try again.") from exc
+    reader = csv.DictReader(io.StringIO(text))
+    headers = {h.strip().lower() for h in (reader.fieldnames or [])}
+    if "name" not in headers:
+        raise HTTPException(400, "The CSV needs a 'name' column. Optional columns: title, phone, email, consent_to_contact, group.")
+    rows = []
+    for row in reader:
+        row = {str(k).strip().lower(): (v or "") for k, v in row.items() if k}
+        row["consent_to_contact"] = str(row.get("consent_to_contact") or "").strip().lower() in {"1", "true", "yes", "y"}
+        rows.append({key: row.get(key, "") for key in GUEST_COLUMNS})
+        if len(rows) > 5000:
+            raise HTTPException(413, "Import up to 5,000 guests at a time.")
+    return rows
+
+
+def check_import(event_id: str, rows: list[dict]) -> list[dict]:
+    existing = guests_for(event_id)
+    accepted: list[dict] = []
+    checked = []
+    for number, fields in enumerate(rows, start=2):
+        guest, problems = clean_guest(fields)
+        status, message = "ok", ""
+        if problems:
+            status, message = "invalid", " ".join(problems)
+        else:
+            duplicate = duplicate_of(guest, existing) or duplicate_of(guest, [{**a, "id": -i - 1} for i, a in enumerate(accepted)])
+            if duplicate:
+                status, message = "duplicate", f"Matches {guest_label(duplicate)}."
+            else:
+                accepted.append({**guest, "phone": guest["phone"], "email": guest["email"]})
+        checked.append({"row": number, **guest, "status": status, "message": message})
+    return checked
+
+
+@app.post("/api/events/{event_id}/guests/import/preview")
+async def preview_import(event_id: str, request: Request, file: UploadFile = File(...)):
+    event, _ = auth.require_event(request, event_id, "guests")
+    editable(event)
+    rows = check_import(event_id, read_guest_csv(await file.read()))
+    return {"rows": rows, "counts": {status: sum(r["status"] == status for r in rows) for status in ("ok", "duplicate", "invalid")}}
+
+
+class ImportRows(BaseModel):
+    rows: list[dict] = Field(max_length=5000)
+
+
+@app.post("/api/events/{event_id}/guests/import")
+async def import_guests(event_id: str, payload: ImportRows, request: Request):
+    event, member = auth.require_event(request, event_id, "guests")
+    editable(event)
+    checked = check_import(event_id, [{key: row.get(key, "") for key in GUEST_COLUMNS} for row in payload.rows])
+    imported = 0
+    for row in checked:
+        if row["status"] == "ok":
+            insert_guest(event_id, row)
+            imported += 1
+    skipped = len(checked) - imported
+    database.audit(event_id, "guests_imported", {"imported": imported, "skipped": skipped}, actor=member)
+    await update_live_listening_terms(event_id)
+    await hub.publish(event_id, {"type": "changed"})
+    return {"imported": imported, "skipped": skipped, "state": event_state(event_id, member["role"])}
+
+
+# ----------------------------------------------------------------- review
 
 
 class ResolveRequest(BaseModel):
     action: str
     guest_id: int | None = None
     amount: int | None = Field(default=None, ge=0)
-    reason: str = ""
-
-
-class VoiceCallStart(BaseModel):
-    browser_call_id: str = Field(min_length=8, max_length=120)
-
-
-class VoiceToolRequest(BaseModel):
-    browser_call_id: str = Field(min_length=8, max_length=120)
-    tool: str = Field(min_length=1, max_length=80)
-    arguments: dict = Field(default_factory=dict)
-
-
-class Hub:
-    def __init__(self):
-        self.listeners: dict[str, set[asyncio.Queue]] = {}
-
-    async def subscribe(self, event_id: str) -> asyncio.Queue:
-        queue: asyncio.Queue = asyncio.Queue(maxsize=100)
-        self.listeners.setdefault(event_id, set()).add(queue)
-        return queue
-
-    def unsubscribe(self, event_id: str, queue: asyncio.Queue) -> None:
-        self.listeners.get(event_id, set()).discard(queue)
-
-    async def publish(self, event_id: str, event: dict) -> None:
-        for queue in list(self.listeners.get(event_id, set())):
-            try:
-                queue.put_nowait(event)
-            except asyncio.QueueFull:
-                try:
-                    queue.get_nowait()
-                    queue.put_nowait(event)
-                except asyncio.QueueEmpty:
-                    pass
-
-
-hub = Hub()
-
-
-def invented_guests() -> list[dict]:
-    names = [
-        ("Ms", "Amina Yusuf"),
-        ("Mr", "Chinedu Obi"),
-        ("Dr", "Tola Adeyemi"),
-    ]
-    return [{"title": title, "name": name, "phone": "", "email": "", "consent_to_contact": False, "group": ""}
-            for title, name in names]
-
-
-def parse_time(value: str | None) -> datetime | None:
-    if not value:
-        return None
-    try:
-        parsed = datetime.fromisoformat(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed.tzinfo else parsed.replace(tzinfo=timezone.utc)
-
-
-def purge_expired_demo_events() -> int:
-    """Delete demo rows and audio after the advertised 24-hour retention."""
-
-    cutoff = datetime.now(timezone.utc)
-    expired = []
-    for event in database.all("SELECT id, expires_at FROM events WHERE demo = 1"):
-        expiry = parse_time(event.get("expires_at"))
-        if expiry and expiry <= cutoff:
-            expired.append(event["id"])
-    for event_id in expired:
-        for table in ("payments", "calls", "audit_log", "pledges", "guests"):
-            database.execute(f"DELETE FROM {table} WHERE event_id = ?", (event_id,))
-        database.execute("DELETE FROM events WHERE id = ?", (event_id,))
-        shutil.rmtree(settings.data_dir / "audio" / event_id, ignore_errors=True)
-        shutil.rmtree(settings.data_dir / "uploads" / event_id, ignore_errors=True)
-    return len(expired)
-
-
-def event_or_404(event_id: str) -> dict:
-    purge_expired_demo_events()
-    event = database.one("SELECT * FROM events WHERE id = ?", (event_id,))
-    if not event:
-        raise HTTPException(404, "Event was not found")
-    return event
-
-
-def guests_for(event_id: str) -> list[dict]:
-    return database.all("SELECT * FROM guests WHERE event_id = ? ORDER BY id", (event_id,))
-
-
-def serialise_pledge(row: dict) -> dict:
-    result = dict(row)
-    result["amount"] = result.pop("amount_minor")
-    return result
-
-
-def serialise_payment(row: dict) -> dict:
-    try:
-        payload = json.loads(row.get("payload_json") or "{}")
-    except (TypeError, json.JSONDecodeError):
-        payload = {}
-    token = row.get("public_token")
-    payment_page = f"/pay/{token}" if token else None
-    if token and settings.public_url:
-        payment_page = f"{settings.public_url}/pay/{token}"
-    return {
-        "id": row["id"],
-        "pledge_id": row["pledge_id"],
-        "reference": row["reference"],
-        "amount_kobo": row["amount_kobo"],
-        "email": row["email"],
-        "payment_link": row["authorization_url"],
-        "payment_page": payment_page,
-        "status": row["status"],
-        "paystack_status": row["paystack_status"],
-        "paid_at": payload.get("paid_at"),
-        "expires_at": row.get("expires_at"),
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-def event_payments(event_id: str) -> list[dict]:
-    return [serialise_payment(row) for row in database.all(
-        "SELECT * FROM payments WHERE event_id = ? ORDER BY id DESC", (event_id,)
-    )]
-
-
-def event_calls(event_id: str) -> list[dict]:
-    result = []
-    for row in database.all("SELECT * FROM calls WHERE event_id = ? ORDER BY id DESC", (event_id,)):
-        try:
-            details = json.loads(row["details_json"])
-        except (TypeError, json.JSONDecodeError):
-            details = {}
-        result.append({"id": row["id"], "pledge_id": row["pledge_id"], "outcome": row["outcome"],
-                       "promised_date": details.get("promised_date"), "dispute": details.get("dispute"),
-                       "payment_link": details.get("payment_link"),
-                       "payment_reference": details.get("payment_reference"),
-                       "created_at": row["created_at"]})
-    return result
-
-
-def event_state(event_id: str) -> dict:
-    event = event_or_404(event_id)
-    guests = guests_for(event_id)
-    pledges = [serialise_pledge(row) for row in database.all(
-        "SELECT * FROM pledges WHERE event_id = ? ORDER BY id DESC", (event_id,))]
-    pledged = sum((p["amount"] or 0) for p in pledges if p["currency"] in (None, "NGN") and p["state"] not in ("rejected",))
-    confirmed = sum((p["amount"] or 0) for p in pledges if p["currency"] in (None, "NGN") and p["state"] in ("confirmed", "corrected", "redeemed"))
-    received = sum((p["amount"] or 0) for p in pledges if p["state"] == "redeemed" and p["currency"] in (None, "NGN"))
-    demo_expiry = parse_time(event.get("expires_at"))
-    return {
-        "event": event, "guests": guests, "pledges": pledges,
-        "key_terms": keyterm_preview(event_id), "calls": event_calls(event_id),
-        "totals": {"pledged": pledged, "confirmed": confirmed, "received": received,
-                   "flags": sum(p["state"] == "flagged" for p in pledges),
-                   "in_kind": sum(1 for p in pledges if p["item"])},
-        "payments": {"configured": bool(settings.paystack_secret_key),
-                      "message": "Paystack test mode is not configured yet." if not settings.paystack_secret_key else "Paystack test mode is configured.",
-                      "records": event_payments(event_id)},
-        "limits": {
-            "audio_seconds_used": int(event.get("demo_audio_seconds") or 0),
-            "audio_seconds_limit": DEMO_AUDIO_LIMIT_SECONDS if event.get("demo") else None,
-            "calls_used": len(event_calls(event_id)) if event.get("demo") else None,
-            "calls_limit": DEMO_CALL_LIMIT if event.get("demo") else None,
-            "expires_at": event.get("expires_at"),
-            "retention_hours": DEMO_RETENTION_HOURS if event.get("demo") else None,
-            "expired": bool(demo_expiry and demo_expiry <= datetime.now(timezone.utc)),
-        },
-    }
-
-
-@app.get("/healthz")
-async def healthz():
-    purge_expired_demo_events()
-    return {"ok": True, "assemblyai_configured": bool(settings.assemblyai_api_key),
-            "paystack_configured": bool(settings.paystack_secret_key), "version": app.version}
-
-
-@app.get("/")
-async def index():
-    return FileResponse(ROOT / "web" / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
-
-
-@app.get("/static/{path:path}")
-async def static_file(path: str):
-    file = (ROOT / "web" / path).resolve()
-    if ROOT / "web" not in file.parents or not file.is_file():
-        raise HTTPException(404, "File was not found")
-    return FileResponse(file, headers={"Cache-Control": "no-cache, must-revalidate"})
-
-
-@app.post("/api/events")
-async def create_event(payload: EventCreate):
-    purge_expired_demo_events()
-    if payload.demo:
-        today_prefix = datetime.now(timezone.utc).date().isoformat()
-        created_today = database.one(
-            "SELECT COUNT(*) AS count FROM events WHERE demo = 1 AND created_at >= ?",
-            (today_prefix,),
-        )
-        if int((created_today or {}).get("count") or 0) >= DEMO_DAILY_LIMIT:
-            raise HTTPException(429, "Today's public demo limit has been reached. The sample recording remains available.")
-    event_id = uuid.uuid4().hex
-    created_at = now()
-    expires_at = (datetime.now(timezone.utc) + timedelta(hours=DEMO_RETENTION_HOURS)).isoformat() if payload.demo else None
-    database.execute(
-        "INSERT INTO events(id, name, organisation, event_date, target_minor, min_minor, max_minor, demo, status, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'setup', ?, ?)",
-        (event_id, payload.name.strip(), payload.organisation.strip(), payload.event_date,
-         payload.target, payload.minimum, payload.maximum, int(payload.demo), created_at, expires_at),
-    )
-    if payload.demo:
-        for guest in invented_guests():
-            database.execute("INSERT INTO guests(event_id, title, name, phone, email, consent_to_contact, group_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                             (event_id, guest["title"], guest["name"], guest["phone"], guest["email"], int(guest["consent_to_contact"]), guest["group"], now()))
-    database.audit(event_id, "event_created", {"demo": payload.demo, "invented_names": payload.demo})
-    return event_state(event_id)
-
-
-@app.get("/api/sample-recording")
-async def sample_recording():
-    path = settings.sample_audio_path
-    if not path or not path.is_file():
-        raise HTTPException(404, "The owner-approved sample recording is not configured.")
-    return FileResponse(path, media_type="audio/wav", filename="pledgebook-demo.wav")
-
-
-@app.get("/api/events/{event_id}")
-async def get_event(event_id: str):
-    return event_state(event_id)
-
-
-@app.post("/api/events/{event_id}/start")
-async def start_event(event_id: str):
-    event_or_404(event_id)
-    database.execute("UPDATE events SET status = 'live' WHERE id = ?", (event_id,))
-    database.audit(event_id, "event_started", {})
-    await hub.publish(event_id, {"type": "event", "status": "live"})
-    return event_state(event_id)
-
-
-@app.post("/api/events/{event_id}/guests")
-async def add_guest(event_id: str, payload: GuestCreate):
-    event_or_404(event_id)
-    guest_id = database.execute("INSERT INTO guests(event_id, title, name, phone, email, consent_to_contact, group_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                                (event_id, payload.title.strip(), payload.name.strip(), payload.phone.strip(), payload.email.strip(), int(payload.consent_to_contact), payload.group.strip(), now()))
-    database.audit(event_id, "guest_added", {"guest_id": guest_id, "name": payload.name.strip()})
-    await update_live_listening_terms(event_id)
-    return database.one("SELECT * FROM guests WHERE id = ?", (guest_id,))
-
-
-@app.post("/api/events/{event_id}/guests/import")
-async def import_guests(event_id: str, file: UploadFile = File(...)):
-    event_or_404(event_id)
-    raw = await file.read()
-    try:
-        rows = csv.DictReader(io.StringIO(raw.decode("utf-8-sig")))
-    except UnicodeDecodeError as exc:
-        raise HTTPException(400, "CSV must be UTF-8") from exc
-    count = 0
-    for row in rows:
-        name = (row.get("name") or "").strip()
-        if not name:
-            continue
-        database.execute("INSERT INTO guests(event_id, title, name, phone, email, consent_to_contact, group_name, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
-                         (event_id, (row.get("title") or "").strip(), name, (row.get("phone") or "").strip(),
-                          (row.get("email") or "").strip(), int((row.get("consent_to_contact") or "").lower() in {"1", "true", "yes"}),
-                          (row.get("group") or "").strip(), now()))
-        count += 1
-    database.audit(event_id, "guests_imported", {"count": count, "filename": file.filename or "guest-list.csv"})
-    await update_live_listening_terms(event_id)
-    return {"imported": count, "state": event_state(event_id)}
-
-
-@app.get("/api/events/{event_id}/stream")
-async def stream_updates(event_id: str):
-    event_or_404(event_id)
-    queue = await hub.subscribe(event_id)
-
-    async def generate():
-        try:
-            yield "event: ready\ndata: {}\n\n"
-            while True:
-                event = await queue.get()
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        finally:
-            hub.unsubscribe(event_id, queue)
-
-    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
-
-
-def keyterm_preview(event_id: str) -> dict:
-    terms = []
-    for guest in guests_for(event_id):
-        terms.append(" ".join(part for part in (guest.get("title"), guest.get("name")) if part).strip())
-    terms = [term for term in terms if term]
-    included = []
-    overflow = []
-    characters = 0
-    for term in terms:
-        if len(included) >= 100 or characters + len(term) > 8000:
-            overflow.append(term)
-            continue
-        included.append(term)
-        characters += len(term)
-    return {"terms": included, "overflow": overflow, "included_count": len(included), "overflow_count": len(overflow), "characters": characters, "term_limit": 100, "character_limit": 8000}
-
-
-def event_keyterms(event_id: str) -> list[str]:
-    return keyterm_preview(event_id)["terms"]
-
-
-async def update_live_listening_terms(event_id: str) -> int:
-    """Apply the current guest list to every active Realtime session."""
-
-    sessions = live_sessions.get(event_id, {})
-    terms = event_keyterms(event_id)
-    updated = 0
-    for aai, lock in list(sessions.items()):
-        try:
-            async with lock:
-                await aai.send(json.dumps({"type": "UpdateConfiguration", "keyterms_prompt": terms}))
-            updated += 1
-        except Exception:
-            sessions.pop(aai, None)
-    return updated
-
-
-def save_pcm_clip(event_id: str, pledge_id: int, pcm: bytes, start_ms: int, end_ms: int) -> Path | None:
-    start_byte = max(0, int(max(0, start_ms) * 16 * 2))
-    end_byte = min(len(pcm), int(max(start_ms + 80, end_ms) * 16 * 2))
-    data = pcm[start_byte:end_byte]
-    if not data:
-        return None
-    folder = settings.data_dir / "audio" / event_id
-    folder.mkdir(parents=True, exist_ok=True)
-    path = folder / f"pledge-{pledge_id}.wav"
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(16000)
-        wav.writeframes(data)
-    return path
-
-
-def make_safe_audio_clip(event_id: str, pledge_id: int, audio_path: Path, recheck, text: str, words: list[dict], guest_id: int | None) -> tuple[Path | None, str]:
-    """Trim a confirmed pledge to its recheck word span only when it is private."""
-
-    if not guest_id:
-        return None, "Audio is not shown because this pledge has no confirmed guest."
-    if not words or not audio_path.is_file():
-        return None, "Audio is not shown because word timings were not returned."
-    guests = guests_for(event_id)
-    heard_guests = []
-    normal_text = re.sub(r"[^a-z]+", "", text.lower())
-    for guest in guests:
-        name_norm = re.sub(r"[^a-z]+", "", guest.get("name", "").lower())
-        if name_norm and name_norm in normal_text:
-            heard_guests.append(guest)
-    if len(heard_guests) != 1 or int(heard_guests[0]["id"]) != int(guest_id):
-        return None, "Audio is not shown because it included another guest's name."
-    if not recheck.amount.is_clear or recheck.start_ms >= recheck.end_ms:
-        return None, "Audio is not shown because the amount was not a single clear phrase."
-    try:
-        with wave.open(str(audio_path), "rb") as source:
-            rate = source.getframerate()
-            channels = source.getnchannels()
-            width = source.getsampwidth()
-            frame_count = source.getnframes()
-            if rate != 16000 or channels != 1 or width != 2:
-                return None, "Audio is not shown because the stored clip has an unsupported format."
-            start_frame = max(0, int((recheck.start_ms - 60) * rate / 1000))
-            end_frame = min(frame_count, int((recheck.end_ms + 60) * rate / 1000))
-            if end_frame <= start_frame:
-                return None, "Audio is not shown because its word timings were empty."
-            source.setpos(start_frame)
-            frames = source.readframes(end_frame - start_frame)
-        safe_path = settings.data_dir / "audio" / event_id / f"pledge-{pledge_id}-safe.wav"
-        safe_path.parent.mkdir(parents=True, exist_ok=True)
-        with wave.open(str(safe_path), "wb") as output:
-            output.setnchannels(1)
-            output.setsampwidth(2)
-            output.setframerate(16000)
-            output.writeframes(frames)
-        return safe_path, "Audio contains only this guest's rechecked name and amount."
-    except (OSError, wave.Error) as exc:
-        return None, f"Audio is not shown because the clip could not be trimmed: {exc}"
-
-
-async def confirm_pledge(event_id: str, pledge_id: int):
-    pledge = database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))
-    if not pledge or not pledge.get("audio_path"):
-        return
-    try:
-        response, elapsed_ms = await sync_transcribe(settings, Path(pledge["audio_path"]), event_keyterms(event_id))
-        text = response.get("text") or ""
-        words = response.get("words") or []
-        guests = guests_for(event_id)
-        recheck = extract_turn(text, words, guests)
-        current_guest = pledge.get("guest_id")
-        recheck_guest = recheck.name_match.guest_id if recheck.name_match else None
-        amount = recheck.amount
-        anonymous = pledge.get("heard_name") == "Anonymous donor"
-        if not amount.is_clear:
-            state, reason = "flagged", amount.reason or "Amount unclear — please check the recording."
-        elif pledge.get("currency") and amount.currency and pledge["currency"] != amount.currency:
-            state, reason = "flagged", "The recheck heard a different currency — please check."
-        elif current_guest and recheck_guest and current_guest != recheck_guest:
-            state, reason = "flagged", "The recheck heard a different guest — please check."
-            current_guest = None
-        elif anonymous or (recheck.name_match and recheck.name_match.kind == "anonymous"):
-            state, reason = "confirmed", "Anonymous pledge — no follow-up call."
-            current_guest = None
-        elif recheck.name_match and recheck.name_match.kind != "matched":
-            state, reason = "flagged", recheck.name_match.reason or "The name needs a human check."
-            current_guest = None
-        elif not current_guest and recheck_guest is None:
-            state, reason = "flagged", recheck.name_match.reason if recheck.name_match else "Name not on the guest list — please confirm."
-        elif pledge["amount_minor"] is not None and amount.minor != pledge["amount_minor"]:
-            state, reason = "corrected", f"₦{pledge['amount_minor']:,} → ₦{amount.minor:,} (rechecked)."
+    reason: str = Field(default="", max_length=500)
+    walk_in_name: str = Field(default="", max_length=160)
+    walk_in_title: str = Field(default="", max_length=40)
+
+
+def settle_after_review(pledge: dict) -> tuple[str, str]:
+    """After a person fixes one thing, keep the line open if something else is still unclear."""
+
+    anonymous = pledge["matched_name"] == "Anonymous donor"
+    if not pledge["guest_id"] and not anonymous:
+        return "flagged", "The guest still needs to be chosen."
+    if pledge["amount_minor"] is None and not pledge["item"]:
+        return "flagged", "The amount still needs to be entered."
+    if int(pledge.get("received_minor") or 0) and pledge["amount_minor"] is not None and pledge["received_minor"] >= pledge["amount_minor"]:
+        return "redeemed", ""
+    return "confirmed", ("Anonymous pledge — no follow-up." if anonymous else "")
+
+
+@app.post("/api/events/{event_id}/pledges/{pledge_id}/resolve")
+async def resolve_pledge(event_id: str, pledge_id: int, payload: ResolveRequest, request: Request):
+    event, member = auth.require_event(request, event_id, "review")
+    editable(event)
+    pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
+    if not pledge:
+        raise HTTPException(404, "Pledge was not found")
+    # Ushers answer open questions; changing an accepted record is for event staff.
+    if pledge["state"] != "flagged" and "run" not in PERMISSIONS[member["role"]]:
+        raise HTTPException(403, "Only event staff can change a confirmed pledge.")
+    action = payload.action
+    details: dict = {"action": action}
+    learned_guest = None
+    if action == "reject":
+        if not payload.reason.strip():
+            raise HTTPException(400, "Give a reason for rejecting this line.")
+        if int(pledge["received_minor"] or 0) > 0:
+            raise HTTPException(409, "This pledge has received payments and cannot be rejected. Record a refund with the payment provider first.")
+        database.execute("UPDATE pledges SET state = 'rejected', reason = ?, updated_at = ? WHERE id = ?", (payload.reason.strip(), now(), pledge_id))
+        followup.revoke_links(event_id, pledge_id, "Pledge rejected", member)
+        details["reason"] = payload.reason.strip()
+    else:
+        if action == "anonymous":
+            database.execute("UPDATE pledges SET guest_id = NULL, matched_name = 'Anonymous donor' WHERE id = ?", (pledge_id,))
+            followup.revoke_links(event_id, pledge_id, "Pledge made anonymous", member)
+        elif action in ("guest", "walk_in"):
+            if action == "walk_in":
+                guest, problems = clean_guest({"title": payload.walk_in_title, "name": payload.walk_in_name})
+                if problems:
+                    raise HTTPException(400, " ".join(problems))
+                duplicate = duplicate_of(guest, guests_for(event_id))
+                if duplicate:
+                    raise HTTPException(409, f"{guest_label(duplicate)} is already on the guest list. Choose them instead.")
+                guest_id = insert_guest(event_id, guest)
+                database.audit(event_id, "guest_added", {"guest_id": guest_id, "name": guest["name"], "walk_in": True}, pledge_id, actor=member)
+            else:
+                guest_id = payload.guest_id or -1
+            chosen = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ? AND removed_at IS NULL", (guest_id, event_id))
+            if not chosen:
+                raise HTTPException(400, "Choose a guest from this event.")
+            if pledge["guest_id"] and pledge["guest_id"] != chosen["id"]:
+                followup.revoke_links(event_id, pledge_id, "Pledge moved to another guest", member)
+            database.execute("UPDATE pledges SET guest_id = ?, matched_name = ? WHERE id = ?", (chosen["id"], chosen["name"], pledge_id))
+            database.execute("UPDATE guests SET learned_from_pledge_id = ?, learned_at = ? WHERE id = ?", (pledge_id, now(), chosen["id"]))
+            learned_guest = chosen["id"]
+            details["guest_id"] = chosen["id"]
+        elif action == "amount":
+            if payload.amount is None or payload.amount <= 0:
+                raise HTTPException(400, "Enter the amount the recording clearly says.")
+            if payload.amount < int(pledge["received_minor"] or 0):
+                raise HTTPException(409, "The amount cannot be less than what has already been paid.")
+            database.execute("UPDATE pledges SET amount_minor = ?, item = NULL WHERE id = ?", (payload.amount, pledge_id))
+            details.update({"from": pledge["amount_minor"], "to": payload.amount})
+        elif action == "keep":
+            details["note"] = "Kept as a separate pledge."
+        elif action == "replace_earlier":
+            match = re.search(r"pledge #(\d+)", pledge["reason"] or "")
+            earlier = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (int(match.group(1)) if match else -1, event_id))
+            if not earlier:
+                raise HTTPException(400, "The earlier pledge was not found.")
+            if int(earlier["received_minor"] or 0) > 0:
+                raise HTTPException(409, "The earlier pledge has payments. Correct its amount instead.")
+            database.execute("UPDATE pledges SET state = 'rejected', reason = ?, updated_at = ? WHERE id = ?",
+                             (f"Replaced by the correction in pledge #{pledge_id}.", now(), earlier["id"]))
+            followup.revoke_links(event_id, earlier["id"], "Replaced by a correction", member)
+            database.audit(event_id, "usher_review", {"action": "replaced_by_correction", "by_pledge_id": pledge_id}, earlier["id"], actor=member)
+            details["replaced_pledge_id"] = earlier["id"]
         else:
-            state, reason = "confirmed", ""
-        matched_name = recheck.name_match.guest_name if recheck.name_match and recheck.name_match.guest_name else pledge["matched_name"]
-        safe_path = None
-        safe_reason = ""
-        if state in {"confirmed", "corrected"} and current_guest and amount.is_clear:
-            safe_path, safe_reason = make_safe_audio_clip(event_id, pledge_id, Path(pledge["audio_path"]), recheck, text, words, current_guest)
-        database.execute("UPDATE pledges SET guest_id = ?, recheck_text = ?, amount_minor = ?, currency = ?, matched_name = ?, state = ?, reason = ?, safe_audio_path = ?, safe_audio_reason = ?, updated_at = ? WHERE id = ?",
-                         (current_guest, text, amount.minor if amount.minor is not None else pledge["amount_minor"], amount.currency or pledge["currency"], matched_name if current_guest else "", state, reason, str(safe_path) if safe_path else None, safe_reason, now(), pledge_id))
-        database.audit(event_id, "rechecked", {"text": text, "elapsed_ms": elapsed_ms, "state": state, "reason": reason}, pledge_id)
-        await hub.publish(event_id, {"type": "pledge", "pledge": serialise_pledge(database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))), "state": event_state(event_id)})
-    except Exception as exc:
-        database.execute("UPDATE pledges SET reason = ?, updated_at = ? WHERE id = ?", (f"Not rechecked — {exc}", now(), pledge_id))
-        database.audit(event_id, "recheck_failed", {"error": str(exc)}, pledge_id)
-        await hub.publish(event_id, {"type": "pledge", "pledge": serialise_pledge(database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))), "state": event_state(event_id)})
+            raise HTTPException(400, "Unknown review action")
+        state, reason = settle_after_review(database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,)))
+        database.execute("UPDATE pledges SET state = ?, reason = ?, updated_at = ? WHERE id = ?", (state, reason, now(), pledge_id))
+        details["state"] = state
+    if learned_guest:
+        updated = await update_live_listening_terms(event_id)
+        database.audit(event_id, "listening_list_updated", {"guest_id": learned_guest, "active_sessions_updated": updated}, pledge_id, actor=member)
+    database.audit(event_id, "usher_review", details, pledge_id, actor=member)
+    await hub.publish(event_id, {"type": "pledge", "pledge_id": pledge_id})
+    return event_state(event_id, member["role"])
 
 
-async def create_live_pledge(event_id: str, live_text: str, live_words: list[dict], name_turn, amount_turn, pcm: bytes, browser: WebSocket | None):
-    event = event_or_404(event_id)
-    guests = guests_for(event_id)
-    name_match = name_turn.name_match
-    if name_match is None and name_turn.name:
-        name_match = match_name(name_turn.name, guests)
-    amount = amount_turn.amount
-    state = "provisional"
-    reason = ""
-    if not amount.is_clear:
-        state, reason = "flagged", amount.reason or "Amount unclear — please check."
-    elif not name_turn.name:
-        state, reason = "flagged", "Name unclear — please confirm."
-    elif name_match and name_match.kind == "anonymous":
-        state, reason = "provisional", "Anonymous pledge — no follow-up call."
-    elif not name_match or name_match.guest_id is None:
-        state, reason = "flagged", name_match.reason if name_match else "Name not on the guest list — please confirm."
-    elif amount.minor is not None and event["min_minor"] and amount.minor < event["min_minor"]:
-        state, reason = "flagged", "Amount is below this event's allowed minimum."
-    elif amount.minor is not None and event["max_minor"] and amount.minor > event["max_minor"]:
-        state, reason = "flagged", "Amount is above this event's allowed maximum."
-    start_ms = min(name_turn.start_ms, amount_turn.start_ms)
-    end_ms = max(name_turn.end_ms, amount_turn.end_ms)
-    recognised_from = None
-    recognised_at = None
-    if name_match and name_match.kind == "matched" and name_match.guest_id:
-        learned_guest = database.one("SELECT learned_from_pledge_id, learned_at FROM guests WHERE id = ?", (name_match.guest_id,))
-        if learned_guest and learned_guest.get("learned_from_pledge_id"):
-            recognised_from = learned_guest["learned_from_pledge_id"]
-            recognised_at = learned_guest.get("learned_at")
-
-    # Realtime can revise a final turn or repeat the same pledge while the
-    # speaker is still being segmented. Treat a nearby repeat as one record;
-    # keep every change in the audit log. A new pledge from the same guest is
-    # still possible when the MC says "adding another", "plus", or similar.
-    recent = None
-    if name_match and name_match.guest_id is not None:
-        recent = database.one(
-            "SELECT * FROM pledges WHERE event_id = ? AND guest_id = ? "
-            "AND source_start_ms IS NOT NULL AND ABS(source_start_ms - ?) <= 60000 "
-            "ORDER BY id DESC LIMIT 1",
-            (event_id, name_match.guest_id, start_ms),
-        )
-    add_on = bool(re.search(r"\b(?:add(?:ing)?|another|plus|extra|in addition)\b", live_text, re.IGNORECASE))
-    if recent and not add_on:
-        if recent["amount_minor"] == amount.minor and recent["currency"] == amount.currency and recent["item"] == amount.item:
-            database.audit(event_id, "live_repeat_ignored", {"text": live_text, "repeated_pledge_id": recent["id"]}, recent["id"])
-            return
-        database.audit(event_id, "live_revision", {
-            "previous_amount": recent["amount_minor"], "previous_currency": recent["currency"],
-            "new_amount": amount.minor, "new_currency": amount.currency, "text": live_text,
-        }, recent["id"])
-        database.execute(
-            "UPDATE pledges SET guest_id = ?, heard_name = ?, matched_name = ?, amount_minor = ?, currency = ?, item = ?, "
-            "live_text = ?, recheck_text = '', source_start_ms = ?, source_end_ms = ?, state = ?, reason = ?, recognised_from_pledge_id = ?, recognised_at = ?, updated_at = ? WHERE id = ?",
-            (name_match.guest_id, name_turn.name or "", name_match.guest_name or "", amount.minor, amount.currency, amount.item,
-             live_text, start_ms, end_ms, state, reason, recognised_from, recognised_at, now(), recent["id"]),
-        )
-        clip = save_pcm_clip(event_id, recent["id"], pcm, start_ms - 500, end_ms + 500)
-        if clip:
-            database.execute("UPDATE pledges SET audio_path = ? WHERE id = ?", (str(clip), recent["id"]))
-        pledge = serialise_pledge(database.one("SELECT * FROM pledges WHERE id = ?", (recent["id"],)))
-        if browser is not None:
-            await browser.send_json({"type": "pledge", "pledge": pledge, "state": event_state(event_id)})
-        await hub.publish(event_id, {"type": "pledge", "pledge": pledge, "state": event_state(event_id)})
-        if clip:
-            asyncio.create_task(confirm_pledge(event_id, recent["id"]))
-        return
-    pledge_id = database.execute(
-        "INSERT INTO pledges(event_id, guest_id, heard_name, matched_name, amount_minor, currency, item, live_text, source_start_ms, source_end_ms, state, reason, recognised_from_pledge_id, recognised_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        (event_id, name_match.guest_id if name_match else None, name_turn.name or "", name_match.guest_name if name_match and name_match.guest_name else "",
-         amount.minor, amount.currency, amount.item, live_text, start_ms, end_ms, state, reason, recognised_from, recognised_at, now(), now()),
-    )
-    clip = save_pcm_clip(event_id, pledge_id, pcm, start_ms - 500, end_ms + 500)
-    if clip:
-        database.execute("UPDATE pledges SET audio_path = ? WHERE id = ?", (str(clip), pledge_id))
-    database.audit(event_id, "live_pledge", {"text": live_text, "state": state}, pledge_id)
-    pledge = serialise_pledge(database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,)))
-    if browser is not None:
-        await browser.send_json({"type": "pledge", "pledge": pledge, "state": event_state(event_id)})
-    await hub.publish(event_id, {"type": "pledge", "pledge": pledge, "state": event_state(event_id)})
-    if clip:
-        asyncio.create_task(confirm_pledge(event_id, pledge_id))
+# ------------------------------------------------------------- listening
 
 
-async def process_uploaded_audio(event_id: str, audio_path: Path):
-    """Run an uploaded human WAV through the same live and confirming path."""
-    aai, _ = await open_realtime(settings, event_keyterms(event_id))
-    session_lock = asyncio.Lock()
-    live_sessions.setdefault(event_id, {})[aai] = session_lock
-    audio = bytearray()
-    event = event_or_404(event_id)
-    window = TurnWindow()
-    seen: set[tuple[int, int, str]] = set()
-
-    async def read_assembly():
-        async for raw in aai:
-            event = json.loads(raw)
-            await hub.publish(event_id, {"type": "realtime", "event": event})
-            if event.get("type") != "Turn" or not event.get("end_of_turn"):
-                continue
-            text = event.get("transcript") or ""
-            words = event.get("words") or []
-            turn = extract_turn(text, words, guests_for(event_id))
-            name_turn, amount_turn, pairing_reason = window.add(turn)
-            if not name_turn or not amount_turn:
-                if pairing_reason and amount_turn:
-                    await create_live_pledge(event_id, amount_turn.text, words, amount_turn, amount_turn, bytes(audio), None)
-                continue
-            key = (name_turn.start_ms, amount_turn.end_ms, f"{name_turn.name}|{amount_turn.text}")
-            if key in seen:
-                continue
-            seen.add(key)
-            await create_live_pledge(event_id, " ".join(part for part in (name_turn.text, amount_turn.text) if part), words, name_turn, amount_turn, bytes(audio), None)
-
-    reader = asyncio.create_task(read_assembly())
-    try:
-        async for chunk in paced_pcm16(audio_path):
-            if event.get("demo") and len(audio) / (16000 * 2) >= DEMO_AUDIO_LIMIT_SECONDS:
-                raise RuntimeError("This private demo has used its three-minute microphone limit.")
-            audio.extend(chunk)
-            async with session_lock:
-                await aai.send(chunk)
-        await asyncio.sleep(2)
-        async with session_lock:
-            await aai.send(json.dumps({"type": "Terminate"}))
-        await asyncio.wait_for(reader, 12)
-    finally:
-        if not reader.done():
-            reader.cancel()
-        await asyncio.gather(reader, return_exceptions=True)
-        if event.get("demo"):
-            database.execute("UPDATE events SET demo_audio_seconds = demo_audio_seconds + ? WHERE id = ?", (int(len(audio) / (16000 * 2)), event_id))
-        live_sessions.get(event_id, {}).pop(aai, None)
-        await aai.close()
-
-
-async def process_uploaded_audio_safely(event_id: str, audio_path: Path):
-    """Keep background upload failures visible to the event and audit log."""
-    try:
-        await process_uploaded_audio(event_id, audio_path)
-        database.audit(event_id, "audio_upload_finished", {"path": str(audio_path)})
-        await hub.publish(event_id, {"type": "upload", "status": "finished"})
-    except Exception as exc:
-        database.audit(event_id, "audio_upload_failed", {"error": str(exc)})
-        await hub.publish(event_id, {"type": "error", "message": f"The recording could not be processed: {exc}"})
-
-
-def normalise_wav(path: Path) -> None:
-    """Convert a real PCM16 WAV to the 16 kHz mono format Realtime expects."""
-    with wave.open(str(path), "rb") as wav:
-        channels = wav.getnchannels()
-        width = wav.getsampwidth()
-        rate = wav.getframerate()
-        frames = wav.getnframes()
-        if wav.getcomptype() != "NONE":
-            raise ValueError("The WAV must use uncompressed PCM audio")
-        if channels not in (1, 2) or width != 2:
-            raise ValueError("The WAV must be mono or stereo 16-bit PCM")
-        if rate <= 0 or frames <= 0:
-            raise ValueError("The WAV has no audio")
-        raw = wav.readframes(frames)
-
-    samples = array("h")
-    samples.frombytes(raw)
-    if sys.byteorder != "little":
-        samples.byteswap()
-    if channels == 2:
-        mono = array("h", ((int(samples[i]) + int(samples[i + 1])) // 2 for i in range(0, len(samples), 2)))
-    else:
-        mono = samples
-
-    if rate == 16000:
-        output = mono
-    else:
-        output_frames = max(1, round(len(mono) * 16000 / rate))
-        output = array("h")
-        for index in range(output_frames):
-            source = index * rate / 16000
-            left = min(len(mono) - 1, int(source))
-            right = min(len(mono) - 1, left + 1)
-            fraction = source - left
-            value = round(mono[left] + (mono[right] - mono[left]) * fraction)
-            output.append(max(-32768, min(32767, value)))
-
-    temporary = path.with_suffix(".normalised.wav")
-    with wave.open(str(temporary), "wb") as wav:
-        wav.setnchannels(1)
-        wav.setsampwidth(2)
-        wav.setframerate(16000)
-        wav.writeframes(output.tobytes())
-    temporary.replace(path)
+def require_live(event: dict) -> None:
+    if event["status"] != "live":
+        raise HTTPException(409, "Go live before listening. A paused or ended event does not record.")
 
 
 @app.post("/api/events/{event_id}/upload")
-async def upload_audio(event_id: str, file: UploadFile = File(...)):
-    event = event_or_404(event_id)
-    if event.get("status") != "live":
-        raise HTTPException(409, "Start the event before processing a recording.")
+async def upload_audio(event_id: str, request: Request, file: UploadFile = File(...)):
+    event, member = auth.require_event(request, event_id, "run")
+    require_live(event)
     if not (file.filename or "").lower().endswith(".wav"):
         raise HTTPException(415, "Upload a WAV recording")
     raw = await file.read()
-    upload_dir = settings.data_dir / "uploads" / event_id
-    upload_dir.mkdir(parents=True, exist_ok=True)
-    path = upload_dir / f"{uuid.uuid4().hex}.wav"
+    if len(raw) > 25 * 1024 * 1024:
+        raise HTTPException(413, "The recording is larger than 25 MB.")
+    folder = settings.data_dir / "uploads" / event_id
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"{uuid.uuid4().hex}.wav"
     path.write_bytes(raw)
+    return await queue_recording(event, member, path, file.filename or "recording.wav")
+
+
+async def queue_recording(event: dict, member: dict, path: Path, label: str) -> dict:
     try:
-        with wave.open(str(path), "rb") as wav:
-            duration = wav.getnframes() / wav.getframerate()
-            if duration > 120:
-                path.unlink(missing_ok=True)
-                raise HTTPException(413, "The uploaded recording is longer than the 120-second live clip limit.")
-            if event.get("demo") and int(event.get("demo_audio_seconds") or 0) + duration > DEMO_AUDIO_LIMIT_SECONDS:
-                path.unlink(missing_ok=True)
-                raise HTTPException(429, "This private demo has reached its three-minute microphone limit.")
-        normalise_wav(path)
-    except HTTPException:
-        raise
-    except (ValueError, wave.Error) as exc:
+        seconds = normalise_wav(path)
+    except (ValueError, EOFError, Exception) as exc:
         path.unlink(missing_ok=True)
-        raise HTTPException(415, str(exc)) from exc
-    database.audit(event_id, "audio_upload_started", {"filename": file.filename, "bytes": len(raw)})
-    asyncio.create_task(process_uploaded_audio_safely(event_id, path))
+        raise HTTPException(415, f"The recording could not be read: {exc}") from exc
+    if seconds > UPLOAD_LIMIT_SECONDS:
+        path.unlink(missing_ok=True)
+        raise HTTPException(413, f"Upload recordings of up to {UPLOAD_LIMIT_SECONDS} seconds.")
+    try:
+        require_usage(event["org_id"], "audio_seconds", int(seconds) + 1)
+    except HTTPException:
+        path.unlink(missing_ok=True)
+        raise
+    database.audit(event["id"], "audio_upload_started", {"file": label, "seconds": round(seconds, 1)}, actor=member)
+    asyncio.create_task(process_uploaded_audio(event["id"], event["org_id"], path))
     return {"accepted": True, "message": "The recording is being heard now. Watch the pledge list for updates."}
+
+
+@app.post("/api/events/{event_id}/sample-audio")
+async def process_sample_audio(event_id: str, request: Request):
+    event, member = auth.require_event(request, event_id, "run")
+    if not event.get("sample"):
+        raise HTTPException(400, "The sample recording can only be used in a sample event.")
+    require_live(event)
+    if not sample_recording_available():
+        raise HTTPException(404, "The sample recording is not configured on this server.")
+    folder = settings.data_dir / "uploads" / event_id
+    folder.mkdir(parents=True, exist_ok=True)
+    path = folder / f"sample-{uuid.uuid4().hex}.wav"
+    path.write_bytes(settings.sample_audio_path.read_bytes())
+    return await queue_recording(event, member, path, "sample recording")
+
+
+def origin_allowed(websocket: WebSocket) -> bool:
+    origin = websocket.headers.get("origin") or ""
+    host = websocket.headers.get("host") or ""
+    allowed = {f"https://{host}", f"http://{host}"}
+    if settings.public_url:
+        allowed.add(settings.public_url)
+    return origin in allowed
 
 
 @app.websocket("/ws/events/{event_id}/capture")
 async def capture(event_id: str, browser: WebSocket):
     await browser.accept()
-    event = event_or_404(event_id)
-    if event.get("status") != "live":
-        await browser.send_json({"type": "error", "message": "Start the event before opening the microphone."})
+    try:
+        if not origin_allowed(browser):
+            raise HTTPException(403, "This connection did not come from Pledgebook.")
+        event, member = auth.require_event(browser, event_id, "run")
+        require_live(event)
+        if remaining_audio(event["org_id"]) <= 0:
+            raise HTTPException(429, "Your organisation has used today's listening allowance.")
+    except HTTPException as exc:
+        await browser.send_json({"type": "error", "message": exc.detail})
         await browser.close(code=1008)
         return
+    session = ListeningSession(event_id, event["org_id"], browser)
     try:
-        aai, begin = await open_realtime(settings, event_keyterms(event_id))
+        begin = await session.open()
     except Exception as exc:
+        session.capture.close()
         await browser.send_json({"type": "error", "message": str(exc)})
         await browser.close(code=1011)
         return
+    database.audit(event_id, "listening_started", {}, actor=member)
     await browser.send_json({"type": "connection", "status": "Listening", "begin": begin})
-    session_lock = asyncio.Lock()
-    live_sessions.setdefault(event_id, {})[aai] = session_lock
-    audio = bytearray()
-    window = TurnWindow()
-    seen: set[tuple[int, int, str]] = set()
-    reading_task = None
-
-    async def read_assembly():
-        async for raw in aai:
-            event = json.loads(raw)
-            await browser.send_json({"type": "realtime", "event": event})
-            if event.get("type") != "Turn" or not event.get("end_of_turn"):
-                continue
-            text = event.get("transcript") or ""
-            words = event.get("words") or []
-            turn = extract_turn(text, words, guests_for(event_id))
-            name_turn, amount_turn, pairing_reason = window.add(turn)
-            if not name_turn or not amount_turn:
-                if pairing_reason:
-                    await browser.send_json({"type": "notice", "message": pairing_reason})
-                    # Keep an amount with no usable name visible for an usher;
-                    # it must never disappear silently.
-                    if amount_turn:
-                        await create_live_pledge(event_id, amount_turn.text, words, amount_turn, amount_turn, bytes(audio), browser)
-                continue
-            key = (name_turn.start_ms, amount_turn.end_ms, f"{name_turn.name}|{amount_turn.text}")
-            if key in seen:
-                continue
-            seen.add(key)
-            combined = " ".join(part for part in (name_turn.text, amount_turn.text) if part)
-            await create_live_pledge(event_id, combined, words, name_turn, amount_turn, bytes(audio), browser)
-
-    reading_task = asyncio.create_task(read_assembly())
+    stopper = asyncio.create_task(session.stop.wait())
     try:
         while True:
-            message = await browser.receive()
+            receiver = asyncio.create_task(browser.receive())
+            done, _ = await asyncio.wait({receiver, stopper}, return_when=asyncio.FIRST_COMPLETED)
+            if stopper in done:
+                receiver.cancel()
+                await session.finish()
+                break
+            message = receiver.result()
             if message.get("type") == "websocket.disconnect":
                 break
             if message.get("bytes") is not None:
-                chunk = message["bytes"]
-                if event.get("demo") and (len(audio) + len(chunk)) / (16000 * 2) > DEMO_AUDIO_LIMIT_SECONDS:
-                    await browser.send_json({"type": "error", "message": "This private demo has reached its three-minute microphone limit."})
-                    async with session_lock:
-                        await aai.send(json.dumps({"type": "Terminate"}))
+                if not session.allowance_left():
+                    await browser.send_json({"type": "stopped", "message": "Your organisation has used today's listening allowance."})
+                    await session.finish()
                     break
-                audio.extend(chunk)
-                async with session_lock:
-                    await aai.send(chunk)
+                await session.send(message["bytes"])
             elif message.get("text"):
                 try:
                     command = json.loads(message["text"])
                 except json.JSONDecodeError:
                     command = {}
                 if command.get("type") == "stop":
-                    async with session_lock:
-                        await aai.send(json.dumps({"type": "Terminate"}))
-                    # Termination flushes the last unfinished amount turn. Do
-                    # not cancel the reader before AssemblyAI sends that final
-                    # Turn, or the pledge would vanish at the button press.
-                    try:
-                        await asyncio.wait_for(reading_task, 10)
-                    except asyncio.TimeoutError:
-                        reading_task.cancel()
+                    # Termination flushes the last unfinished turn; wait for
+                    # it or the final pledge would vanish at the button press.
+                    await session.finish()
                     break
-    except WebSocketDisconnect:
+    except Exception:
+        # A closed browser or service connection ends the session; the
+        # finally block below records it and releases everything.
         pass
     finally:
-        if event.get("demo") and audio:
-            database.execute("UPDATE events SET demo_audio_seconds = demo_audio_seconds + ? WHERE id = ?", (int(len(audio) / (16000 * 2)), event_id))
-        live_sessions.get(event_id, {}).pop(aai, None)
-        if not reading_task.done():
-            reading_task.cancel()
-        try:
-            await aai.close()
-        except Exception:
-            pass
+        stopper.cancel()
+        database.audit(event_id, "listening_stopped", {"seconds": round(session.capture.seconds, 1)}, actor=member)
+        await session.close()
         try:
             await browser.close()
         except Exception:
             pass
 
 
-@app.get("/api/audio/{event_id}/{pledge_id}")
-async def pledge_audio(event_id: str, pledge_id: int):
-    event_or_404(event_id)
-    pledge = database.one("SELECT audio_path FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
-    if not pledge or not pledge.get("audio_path"):
-        raise HTTPException(404, "The audio moment is not available")
-    path = Path(pledge["audio_path"]).resolve()
-    if settings.data_dir.resolve() not in path.parents or not path.is_file():
-        raise HTTPException(404, "The audio moment is not available")
-    return FileResponse(path, media_type="audio/wav")
+def remaining_audio(org_id: str) -> int:
+    return usage_limits()["audio_seconds"] - int(usage_today(org_id).get("audio_seconds") or 0)
 
 
-def payment_by_token(token: str) -> dict:
-    payment = database.one("SELECT * FROM payments WHERE public_token = ?", (token,))
-    if not payment:
-        raise HTTPException(404, "This payment page was not found.")
-    expiry = parse_time(payment.get("expires_at"))
-    if expiry and expiry <= datetime.now(timezone.utc):
-        raise HTTPException(410, "This payment page has expired. Ask the organiser for a new link.")
-    return payment
+@app.get("/api/events/{event_id}/stream")
+async def stream_updates(event_id: str, request: Request):
+    event, member = auth.require_event(request, event_id, "view")
+    role = member["role"]
+    queue = await hub.subscribe(event_id)
 
-
-@app.get("/pay/{token}", response_class=HTMLResponse)
-async def payment_page(token: str):
-    try:
-        payment = payment_by_token(token)
-    except HTTPException as exc:
-        return HTMLResponse(f"<h1>Pledgebook</h1><p>{html.escape(str(exc.detail))}</p>", status_code=exc.status_code)
-    event = event_or_404(payment["event_id"])
-    pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (payment["pledge_id"], payment["event_id"]))
-    if not pledge:
-        return HTMLResponse("<h1>Pledgebook</h1><p>This pledge is no longer available.</p>", status_code=404)
-    guest_name = pledge.get("matched_name") or pledge.get("heard_name") or "Guest"
-    amount = pledge.get("amount_minor") or 0
-    amount_label = f"₦{int(amount):,}" if (pledge.get("currency") in (None, "NGN")) else f"{pledge.get('currency')} {amount:,}"
-    safe_audio = pledge.get("safe_audio_path")
-    audio_available = bool(safe_audio and Path(safe_audio).is_file())
-    audio_block = (
-        f'<audio controls preload="none" src="/api/payment/{html.escape(token)}/audio"></audio>'
-        if audio_available else
-        f'<p class="muted">{html.escape(pledge.get("safe_audio_reason") or "Audio is not shown because the exact words could not be separated safely.")}</p>'
-    )
-    transcript = html.escape(pledge.get("recheck_text") or pledge.get("live_text") or "The spoken words are not available.")
-    event_name = html.escape(event.get("name") or "Fundraising event")
-    organisation = html.escape(event.get("organisation") or "The organiser")
-    guest_name_html = html.escape(guest_name)
-    amount_html = html.escape(amount_label)
-    paystack_link = html.escape(payment["authorization_url"], quote=True)
-    return HTMLResponse(f"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Pledgebook payment</title><style>body{{font:16px system-ui,sans-serif;background:#f8fafc;color:#1e293b;margin:0;padding:32px}}main{{max-width:620px;margin:auto;background:white;border:1px solid #e2e8f0;border-radius:20px;padding:28px;box-shadow:0 12px 40px #1e293b14}}h1{{margin-top:0}}.amount{{font-size:44px;font-weight:900;margin:12px 0}}audio{{width:100%;margin:12px 0}}a{{display:inline-block;background:#155eef;color:#fff;text-decoration:none;font-weight:800;padding:13px 17px;border-radius:10px}}.muted{{color:#64748b}}.notice{{background:#e8efff;padding:12px;border-radius:10px}}</style></head>
-<body><main><p class="muted">Pledgebook · Test payment only</p><h1>Thank you, {guest_name_html}</h1>
-<p>{organisation} · {event_name} · {html.escape(event.get("event_date") or "")}</p>
-<h2>Here's the moment you pledged</h2>{audio_block}<p class="muted">Words heard: {transcript}</p>
-<div class="amount">{amount_html}</div><p class="notice">This is a Paystack Test Mode checkout. No real money moves.</p>
-<p><a href="{paystack_link}" target="_blank" rel="noreferrer">Continue to Paystack test checkout</a></p>
-<p class="muted">Test card: 4084 0840 8408 4081 · expiry in the future · CVV 408</p></main></body></html>""")
-
-
-@app.get("/api/payment/{token}/audio")
-async def payment_audio(token: str):
-    payment = payment_by_token(token)
-    pledge = database.one("SELECT safe_audio_path FROM pledges WHERE id = ? AND event_id = ?", (payment["pledge_id"], payment["event_id"]))
-    path = Path((pledge or {}).get("safe_audio_path") or "").resolve()
-    if not pledge or not path.is_file() or settings.data_dir.resolve() not in path.parents:
-        raise HTTPException(404, "The safe pledge moment is not available.")
-    return FileResponse(path, media_type="audio/wav")
-
-
-@app.post("/api/events/{event_id}/pledges/{pledge_id}/resolve")
-async def resolve_pledge(event_id: str, pledge_id: int, payload: ResolveRequest):
-    event_or_404(event_id)
-    pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
-    if not pledge:
-        raise HTTPException(404, "Pledge was not found")
-    action = payload.action
-    if action == "reject":
-        if not payload.reason.strip():
-            raise HTTPException(400, "A reason is required when rejecting a pledge")
-        state = "rejected"
-        update = (state, payload.reason.strip())
-    elif action == "anonymous":
-        state = "confirmed"
-        update = (state, "Anonymous pledge — no follow-up call.")
-        database.execute("UPDATE pledges SET guest_id = NULL, matched_name = 'Anonymous donor' WHERE id = ?", (pledge_id,))
-    elif action == "guest":
-        guest = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ?", (payload.guest_id or -1, event_id))
-        if not guest:
-            raise HTTPException(400, "Choose a guest from this event")
-        state = "confirmed"
-        update = (state, "")
-        database.execute("UPDATE pledges SET guest_id = ?, matched_name = ? WHERE id = ?", (guest["id"], guest["name"], pledge_id))
-        learned_at = now()
-        database.execute("UPDATE guests SET learned_from_pledge_id = ?, learned_at = ? WHERE id = ?", (pledge_id, learned_at, guest["id"]))
-    elif action == "amount":
-        if payload.amount is None:
-            raise HTTPException(400, "Enter an amount")
-        state = "confirmed"
-        update = (state, "")
-        database.execute("UPDATE pledges SET amount_minor = ? WHERE id = ?", (payload.amount, pledge_id))
-    else:
-        raise HTTPException(400, "Unknown review action")
-    database.execute("UPDATE pledges SET state = ?, reason = ?, updated_at = ? WHERE id = ?", (*update, now(), pledge_id))
-    details = {"action": action, "reason": payload.reason}
-    if action == "guest":
-        updated_sessions = await update_live_listening_terms(event_id)
-        details.update({"listening_list_updated": True, "active_sessions_updated": updated_sessions, "guest_id": payload.guest_id})
-        database.audit(event_id, "listening_list_updated", {"guest_id": payload.guest_id, "by_pledge_id": pledge_id, "active_sessions_updated": updated_sessions}, pledge_id)
-    database.audit(event_id, "usher_review", details, pledge_id)
-    await hub.publish(event_id, {"type": "pledge", "pledge": serialise_pledge(database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))), "state": event_state(event_id)})
-    return event_state(event_id)
-
-
-@app.get("/api/voice-token")
-async def get_voice_token():
-    try:
-        return {"token": await voice_token(settings)}
-    except AssemblyAIError as exc:
-        raise HTTPException(503, str(exc)) from exc
-
-
-def call_row(event_id: str, pledge_id: int, browser_call_id: str) -> dict:
-    rows = database.all("SELECT * FROM calls WHERE event_id = ? AND pledge_id = ? ORDER BY id DESC", (event_id, pledge_id))
-    for row in rows:
+    async def generate():
         try:
-            details = json.loads(row["details_json"])
-        except (TypeError, json.JSONDecodeError):
-            details = {}
-        if details.get("browser_call_id") == browser_call_id:
-            row["details"] = details
-            return row
-    raise HTTPException(404, "This follow-up call was not found")
+            yield "event: ready\ndata: {}\n\n"
+            while True:
+                try:
+                    message = await asyncio.wait_for(queue.get(), 25)
+                except asyncio.TimeoutError:
+                    yield ": keep-alive\n\n"
+                    continue
+                if message.get("type") != "realtime":
+                    try:
+                        message = {**message, "state": event_state(event_id, role)}
+                    except HTTPException:
+                        message = {"type": "deleted"}
+                yield f"data: {json.dumps(message, ensure_ascii=False)}\n\n"
+        finally:
+            hub.unsubscribe(event_id, queue)
+
+    return StreamingResponse(generate(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-def latest_payment(event_id: str, pledge_id: int) -> dict | None:
-    return database.one(
-        "SELECT * FROM payments WHERE event_id = ? AND pledge_id = ? ORDER BY id DESC LIMIT 1",
-        (event_id, pledge_id),
-    )
+@app.get("/api/events/{event_id}/pledges/{pledge_id}/audio")
+async def pledge_audio(event_id: str, pledge_id: int, request: Request):
+    auth.require_event(request, event_id, "review")
+    pledge = database.one("SELECT audio_path FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
+    path = safe_data_path((pledge or {}).get("audio_path"))
+    if not path:
+        raise HTTPException(404, "The audio moment is not available")
+    return FileResponse(path, media_type="audio/wav")
 
 
-def payment_page_url(token: str) -> str:
-    relative = f"/pay/{token}"
-    return f"{settings.public_url}{relative}" if settings.public_url else relative
+# ------------------------------------------------------ records and reports
 
 
-def ensure_payment_page_token(payment: dict) -> dict:
-    token = payment.get("public_token")
-    expires_at = payment.get("expires_at")
-    if not token or not expires_at:
-        token = token or secrets.token_urlsafe(32)
-        expires_at = expires_at or (datetime.now(timezone.utc) + timedelta(hours=DEMO_RETENTION_HOURS)).isoformat()
-        database.execute("UPDATE payments SET public_token = ?, expires_at = ? WHERE id = ?", (token, expires_at, payment["id"]))
-        payment = {**payment, "public_token": token, "expires_at": expires_at}
-    return payment
+ACTION_LABELS = {
+    "event_created": "Event created", "sample_event_created": "Sample event created", "event_start": "Event went live",
+    "event_pause": "Event paused", "event_resume": "Event resumed", "event_end": "Event ended", "event_reopen": "Event reopened",
+    "event_archive": "Event archived", "event_unarchive": "Event restored from archive", "event_details_changed": "Event details changed",
+    "guest_added": "Guest added", "guest_edited": "Guest edited", "guest_removed": "Guest removed", "guests_imported": "Guests imported",
+    "live_pledge": "Pledge heard", "live_repeat_ignored": "Repeated announcement not counted twice", "rechecked": "Pledge rechecked",
+    "recheck_failed": "Recheck failed", "usher_review": "Line reviewed", "listening_list_updated": "Listening list updated",
+    "listening_started": "Listening started", "listening_stopped": "Listening stopped", "audio_upload_started": "Recording sent",
+    "audio_upload_finished": "Recording finished", "audio_upload_failed": "Recording failed",
+    "pledge_page_created": "Private pledge page created", "pledge_page_delivery": "Pledge page sent", "pledge_page_opened": "Guest opened pledge page",
+    "pledge_page_closed": "Pledge page closed", "phone_call_logged": "Phone call logged", "checkout_started": "Guest started a payment",
+    "payment_received": "Payment received", "payment_link_failed": "Payment could not start", "payment_verification_failed": "Payment check failed",
+    "payment_promised": "Payment date promised", "payment_disputed": "Guest raised a problem", "follow_up_opted_out": "Guest opted out of follow-up",
+    "assistant_started": "Guest started the voice assistant", "assistant_ended": "Voice assistant finished", "identity_checked": "Identity checked",
+    "staff_invited": "Staff invited", "audio_deleted_by_retention": "Audio deleted after the retention period",
+}
 
 
-def payment_snapshot(data: dict) -> dict:
-    """Keep only the Paystack fields needed for an audit trail."""
-
-    return {
-        "reference": data.get("reference"),
-        "status": data.get("status"),
-        "amount": data.get("amount"),
-        "currency": data.get("currency"),
-        "gateway_response": data.get("gateway_response"),
-        "paid_at": data.get("paid_at"),
-    }
-
-
-async def verify_and_redeem_payment(payment: dict) -> dict:
-    """Verify a Paystack transaction and redeem its pledge once only."""
-
-    result = await verify_transaction(settings, payment["reference"])
-    data = result["data"]
-    status = str(data.get("status") or "").lower()
-    snapshot = payment_snapshot(data)
-    if data.get("reference") != payment["reference"]:
-        raise PaystackError("Paystack returned a different payment reference.")
-    if int(data.get("amount") or 0) != int(payment["amount_kobo"]):
-        raise PaystackError("Paystack returned a different payment amount.")
-    if str(data.get("currency") or "NGN").upper() != "NGN":
-        raise PaystackError("Paystack returned a non-naira payment.")
-    if status != "success":
-        database.execute(
-            "UPDATE payments SET status = ?, paystack_status = ?, payload_json = ?, updated_at = ? WHERE id = ?",
-            ("pending", status, json.dumps(snapshot, ensure_ascii=False), now(), payment["id"]),
-        )
-        return {"redeemed": False, "status": status, "data": snapshot}
-
-    database.execute(
-        "UPDATE payments SET status = 'success', paystack_status = ?, payload_json = ?, updated_at = ? WHERE id = ?",
-        (status, json.dumps(snapshot, ensure_ascii=False), now(), payment["id"]),
-    )
-    pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (payment["pledge_id"], payment["event_id"]))
-    if not pledge:
-        raise PaystackError("The payment is not linked to a pledge in this event.")
-    if pledge["state"] != "redeemed":
-        database.execute(
-            "UPDATE pledges SET state = 'redeemed', reason = '', updated_at = ? WHERE id = ? AND state != 'redeemed'",
-            (now(), pledge["id"]),
-        )
-        database.audit(payment["event_id"], "payment_redeemed", {"reference": payment["reference"], "amount_kobo": payment["amount_kobo"]}, pledge["id"])
-    return {"redeemed": True, "status": status, "data": snapshot}
-
-
-async def create_payment_link(event_id: str, pledge: dict, call: dict, guest: dict) -> dict:
-    """Create or reuse a test checkout for a confirmed naira pledge."""
-
-    if pledge.get("item"):
-        return {"ok": False, "error": "This is an in-kind gift, so no payment link was created."}
-    if pledge.get("currency") not in (None, "NGN"):
-        return {"ok": False, "error": "Only naira pledges can use this Paystack test link."}
-    amount_naira = int(pledge.get("amount_minor") or 0)
-    if amount_naira <= 0:
-        return {"ok": False, "error": "This pledge has no clear naira amount, so no payment link was created."}
-    email = str(guest.get("email") or "").strip()
-    if not email:
-        return {"ok": False, "error": "This guest has no email address. Add one before sending a payment link."}
-
-    existing = latest_payment(event_id, pledge["id"])
-    if existing and existing["status"] in {"initialized", "pending", "success"}:
-        existing = ensure_payment_page_token(existing)
-        return {
-            "ok": True,
-            "payment_link": existing["authorization_url"],
-            "payment_page": payment_page_url(existing["public_token"]),
-            "reference": existing["reference"],
-            "payment_status": existing["status"],
-            "reused": True,
-        }
-
-    reference = f"pb-{event_id[:12]}-{pledge['id']}-{uuid.uuid4().hex[:10]}"
+def activity_row(row: dict) -> dict:
     try:
-        created = await initialize_transaction(
-            settings,
-            amount_naira=amount_naira,
-            email=email,
-            reference=reference,
-            metadata={"event_id": event_id, "pledge_id": pledge["id"], "call_id": call["id"], "product": "pledgebook"},
-        )
-    except PaystackError as exc:
-        database.audit(event_id, "payment_link_failed", {"error": str(exc)}, pledge["id"])
-        return {"ok": False, "error": str(exc)}
-    data = created["data"]
-    created_at = now()
-    public_token = secrets.token_urlsafe(32)
-    expires_at = (datetime.now(timezone.utc) + timedelta(hours=DEMO_RETENTION_HOURS)).isoformat()
-    database.execute(
-        "INSERT INTO payments(event_id, pledge_id, reference, amount_kobo, email, authorization_url, public_token, expires_at, status, paystack_status, payload_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'initialized', '', ?, ?, ?)",
-        (event_id, pledge["id"], data["reference"], created["amount_kobo"], email, data["authorization_url"], public_token, expires_at, json.dumps({"message": created["body"].get("message")}, ensure_ascii=False), created_at, created_at),
-    )
-    database.audit(event_id, "payment_link_created", {"reference": data["reference"], "amount_kobo": created["amount_kobo"], "email": email}, pledge["id"])
-    return {"ok": True, "payment_link": data["authorization_url"], "payment_page": payment_page_url(public_token), "reference": data["reference"], "payment_status": "initialized", "reused": False}
+        details = json.loads(row.get("details_json") or "{}")
+    except json.JSONDecodeError:
+        details = {}
+    return {"id": row["id"], "action": row["action"], "label": ACTION_LABELS.get(row["action"], row["action"].replace("_", " ").capitalize()),
+            "actor": row.get("actor_label") or "", "pledge_id": row.get("pledge_id"), "details": details, "created_at": row["created_at"]}
 
 
-@app.post("/api/events/{event_id}/pledges/{pledge_id}/call/start")
-async def start_follow_up_call(event_id: str, pledge_id: int, payload: VoiceCallStart):
-    event = event_or_404(event_id)
-    if event.get("demo") and len(event_calls(event_id)) >= DEMO_CALL_LIMIT:
-        raise HTTPException(429, "This private demo allows two follow-up calls. Start again for a fresh sandbox.")
-    pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
-    if not pledge:
-        raise HTTPException(404, "Pledge was not found")
-    if pledge["state"] not in ("confirmed", "corrected", "redeemed"):
-        raise HTTPException(400, "Only a confirmed pledge can start a follow-up")
-    guest = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ?", (pledge.get("guest_id") or -1, event_id))
-    if not guest:
-        raise HTTPException(400, "This pledge has no confirmed guest")
-    if not guest["consent_to_contact"]:
-        raise HTTPException(400, "Follow-up consent is not recorded for this guest")
-    details = {"browser_call_id": payload.browser_call_id, "identity_confirmed": False, "pledge_id": pledge_id}
-    call_id = database.execute(
-        "INSERT INTO calls(event_id, pledge_id, outcome, details_json, created_at) VALUES (?, ?, ?, ?, ?)",
-        (event_id, pledge_id, "incomplete", json.dumps(details), now()),
-    )
-    database.audit(event_id, "follow_up_started", {"call_id": call_id}, pledge_id)
-    return {"call_id": call_id, "event": {"name": event["name"], "organisation": event["organisation"], "event_date": event["event_date"]},
-            "pledge": serialise_pledge(pledge), "guest": guest}
+@app.get("/api/events/{event_id}/activity")
+async def activity(event_id: str, request: Request, before: int | None = None, limit: int = 100):
+    auth.require_event(request, event_id, "run")
+    limit = max(1, min(limit, 500))
+    params: tuple = (event_id, before, limit) if before else (event_id, limit)
+    rows = database.all(
+        "SELECT * FROM audit_log WHERE event_id = ?" + (" AND id < ?" if before else "") + " ORDER BY id DESC LIMIT ?", params)
+    return {"rows": [activity_row(row) for row in rows], "more": len(rows) == limit}
 
 
-@app.post("/api/events/{event_id}/pledges/{pledge_id}/call/tool")
-async def follow_up_tool(event_id: str, pledge_id: int, payload: VoiceToolRequest):
-    call = call_row(event_id, pledge_id, payload.browser_call_id)
-    details = call["details"]
-    args = payload.arguments or {}
-    tool = payload.tool
-
-    if tool == "confirm_identity":
-        is_correct = args.get("is_correct_person") is True
-        details["identity_confirmed"] = is_correct
-        outcome = "incomplete" if is_correct else "wrong_person"
-        message = "Identity confirmed. You may now discuss the pledge." if is_correct else "Identity was not confirmed. End the call without discussing the pledge."
-        database.execute("UPDATE calls SET outcome = ?, details_json = ? WHERE id = ?", (outcome, json.dumps(details), call["id"]))
-        database.audit(event_id, "identity_checked", {"is_correct_person": is_correct}, pledge_id)
-        return {"ok": True, "identity_confirmed": is_correct, "message": message}
-
-    if tool == "send_payment_link":
-        if not details.get("identity_confirmed"):
-            return {"ok": False, "error": "Identity was not confirmed; no payment information was shared."}
-        if not settings.paystack_secret_key:
-            database.audit(event_id, "payment_link_unavailable", {"reason": "Paystack test mode is not configured"}, pledge_id)
-            return {"ok": False, "error": "Paystack test mode is not configured, so no payment link was created."}
-        pledge = database.one("SELECT * FROM pledges WHERE id = ? AND event_id = ?", (pledge_id, event_id))
-        guest = database.one("SELECT * FROM guests WHERE id = ? AND event_id = ?", (pledge.get("guest_id") if pledge else -1, event_id))
-        if not pledge or not guest:
-            return {"ok": False, "error": "This pledge no longer has a confirmed guest."}
-        result = await create_payment_link(event_id, pledge, call, guest)
-        if result.get("ok"):
-            details["payment_link"] = result.get("payment_link")
-            details["payment_reference"] = result.get("reference")
-            details["payment_status"] = result.get("payment_status")
-            database.execute("UPDATE calls SET details_json = ? WHERE id = ?", (json.dumps(details), call["id"]))
-            await hub.publish(event_id, {"type": "payment", "pledge_id": pledge_id, "payment": result, "state": event_state(event_id)})
-        return result
-
-    if tool == "record_promise":
-        if not details.get("identity_confirmed"):
-            return {"ok": False, "error": "Identity was not confirmed; no promise was recorded."}
-        promised_date = str(args.get("promised_date") or "").strip()
-        if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", promised_date):
-            return {"ok": False, "error": "Please give a date in year-month-day form."}
-        details["promised_date"] = promised_date
-        database.execute("UPDATE calls SET outcome = ?, details_json = ? WHERE id = ?", ("promised", json.dumps(details), call["id"]))
-        database.audit(event_id, "payment_promised", {"promised_date": promised_date}, pledge_id)
-        return {"ok": True, "message": "The promised date was recorded."}
-
-    if tool == "record_dispute":
-        details["dispute"] = str(args.get("what_they_said") or "").strip()[:1000]
-        database.execute("UPDATE calls SET outcome = ?, details_json = ? WHERE id = ?", ("disputed", json.dumps(details), call["id"]))
-        database.audit(event_id, "payment_disputed", {"what_they_said": details["dispute"]}, pledge_id)
-        return {"ok": True, "message": "The dispute was recorded for a human to review."}
-
-    if tool == "record_opt_out":
-        details["opted_out"] = True
-        database.execute("UPDATE calls SET outcome = ?, details_json = ? WHERE id = ?", ("opted_out", json.dumps(details), call["id"]))
-        database.audit(event_id, "follow_up_opted_out", {}, pledge_id)
-        return {"ok": True, "message": "The opt-out was recorded."}
-
-    if tool == "end_call":
-        allowed = {"paid_link_sent", "promised", "disputed", "declined", "opted_out", "wrong_person", "incomplete"}
-        outcome = str(args.get("outcome") or "incomplete")
-        if outcome not in allowed:
-            outcome = "incomplete"
-        database.execute("UPDATE calls SET outcome = ?, details_json = ? WHERE id = ?", (outcome, json.dumps(details), call["id"]))
-        database.audit(event_id, "follow_up_ended", {"outcome": outcome}, pledge_id)
-        return {"ok": True, "message": "The call outcome was recorded."}
-
-    return {"ok": False, "error": "That follow-up action is not available."}
+def settlement_rows(event_id: str) -> list[dict]:
+    rows = []
+    for pledge in database.all("SELECT * FROM pledges WHERE event_id = ? AND state != 'rejected' ORDER BY id", (event_id,)):
+        guest = database.one("SELECT title, name, phone, email, consent_to_contact FROM guests WHERE id = ?", (pledge["guest_id"] or -1,)) or {}
+        last_call = database.one("SELECT outcome, details_json, created_at FROM calls WHERE pledge_id = ? ORDER BY id DESC LIMIT 1", (pledge["id"],))
+        last_delivery = database.one("SELECT channel, status, created_at FROM deliveries WHERE pledge_id = ? ORDER BY id DESC LIMIT 1", (pledge["id"],))
+        promised = (json.loads(last_call["details_json"] or "{}") or {}).get("promised_date") if last_call else None
+        amount = pledge["amount_minor"]
+        received = int(pledge["received_minor"] or 0)
+        rows.append({
+            "pledge_id": pledge["id"], "guest": guest_label(guest) or pledge["matched_name"] or pledge["heard_name"] or "Name unclear",
+            "phone": guest.get("phone", ""), "email": guest.get("email", ""),
+            "amount": amount, "currency": pledge["currency"] or "NGN", "item": pledge["item"], "received": received,
+            "outstanding": max(0, (amount or 0) - received) if not pledge["item"] else None, "state": pledge["state"],
+            "promised_date": promised, "last_contact": (last_call or last_delivery or {}).get("created_at"),
+            "last_outcome": (last_call or {}).get("outcome") or ((last_delivery or {}).get("channel") and f"page sent by {last_delivery['channel']}"),
+            "follow_up": "stopped" if pledge["follow_up_stopped"] else ("allowed" if guest.get("consent_to_contact") else "no consent"),
+        })
+    return rows
 
 
-@app.post("/api/paystack/webhook")
-async def paystack_webhook(request: Request):
-    """Accept Paystack events only after validating their raw-body signature."""
-
-    raw_body = await request.body()
-    signature = request.headers.get("x-paystack-signature")
-    if not valid_webhook_signature(settings.paystack_secret_key, raw_body, signature):
-        raise HTTPException(401, "The payment notification signature could not be verified.")
-    try:
-        payload = json.loads(raw_body.decode("utf-8"))
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise HTTPException(400, "The payment notification was not valid JSON.") from exc
-    if not isinstance(payload, dict):
-        raise HTTPException(400, "The payment notification was not an object.")
-    if payload.get("event") != "charge.success":
-        return {"ok": True, "ignored": True}
-    data = payload.get("data") or {}
-    reference = str(data.get("reference") or "").strip()
-    payment = database.one("SELECT * FROM payments WHERE reference = ?", (reference,))
-    if not payment:
-        # A webhook can arrive before a local record is available after a
-        # restart. Acknowledge unknown references without inventing a pledge.
-        return {"ok": True, "ignored": True}
-    if payment["status"] == "success":
-        return {"ok": True, "duplicate": True, "reference": reference}
-    try:
-        result = await verify_and_redeem_payment(payment)
-    except PaystackError as exc:
-        database.audit(payment["event_id"], "payment_verification_failed", {"reference": reference, "error": str(exc)}, payment["pledge_id"])
-        raise HTTPException(503, str(exc)) from exc
-    await hub.publish(payment["event_id"], {"type": "payment", "pledge_id": payment["pledge_id"], "payment": {"reference": reference, **result}, "state": event_state(payment["event_id"])})
-    return {"ok": True, "reference": reference, **result}
+@app.get("/api/events/{event_id}/settlement")
+async def settlement(event_id: str, request: Request):
+    event, member = auth.require_event(request, event_id, "follow_up")
+    rows = settlement_rows(event_id)
+    state = event_state(event_id, member["role"])
+    return {"rows": rows, "totals": state["totals"],
+            "counts": {"pledges": len(rows), "fully_paid": sum(r["state"] == "redeemed" for r in rows),
+                       "part_paid": sum(0 < r["received"] < (r["amount"] or 0) for r in rows),
+                       "unpaid": sum(r["received"] == 0 and r["state"] in ACCEPTED_STATES and not r["item"] for r in rows),
+                       "needs_checking": sum(r["state"] == "flagged" for r in rows), "in_kind": sum(bool(r["item"]) for r in rows)}}
 
 
-@app.post("/api/events/{event_id}/pledges/{pledge_id}/payment/verify")
-async def verify_pledge_payment(event_id: str, pledge_id: int):
-    """Manually verify the current checkout after a test payment completes."""
+def csv_response(filename: str, fields: list[str], rows: list[dict]) -> StreamingResponse:
+    stream = io.StringIO()
+    writer = csv.DictWriter(stream, fieldnames=fields, extrasaction="ignore")
+    writer.writeheader()
+    for row in rows:
+        writer.writerow({key: ("" if row.get(key) is None else row.get(key)) for key in fields})
+    return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{filename}"', "Cache-Control": "no-store"})
 
-    event_or_404(event_id)
-    payment = latest_payment(event_id, pledge_id)
-    if not payment:
-        raise HTTPException(404, "No payment link exists for this pledge.")
-    if payment["status"] == "success":
-        return {"ok": True, "duplicate": True, "payment": serialise_payment(payment), "state": event_state(event_id)}
-    try:
-        result = await verify_and_redeem_payment(payment)
-    except PaystackError as exc:
-        database.audit(event_id, "payment_verification_failed", {"reference": payment["reference"], "error": str(exc)}, pledge_id)
-        raise HTTPException(502, str(exc)) from exc
-    await hub.publish(event_id, {"type": "payment", "pledge_id": pledge_id, "payment": {"reference": payment["reference"], **result}, "state": event_state(event_id)})
-    refreshed = database.one("SELECT * FROM payments WHERE id = ?", (payment["id"],))
-    return {"ok": True, "payment": serialise_payment(refreshed), "verification": result, "state": event_state(event_id)}
+
+def file_slug(event: dict) -> str:
+    return re.sub(r"[^a-z0-9]+", "-", event["name"].lower()).strip("-")[:40] or "event"
 
 
 @app.get("/api/events/{event_id}/export.csv")
-async def export_csv(event_id: str):
-    event_or_404(event_id)
+async def export_register(event_id: str, request: Request):
+    event, _ = auth.require_event(request, event_id, "export")
     rows = database.all("SELECT * FROM pledges WHERE event_id = ? ORDER BY id", (event_id,))
-    stream = io.StringIO()
-    fields = ["id", "heard_name", "matched_name", "amount_minor", "currency", "item", "live_text", "recheck_text", "state", "reason", "created_at", "updated_at"]
-    writer = csv.DictWriter(stream, fieldnames=fields)
-    writer.writeheader()
-    writer.writerows({field: row.get(field) for field in fields} for row in rows)
-    return StreamingResponse(iter([stream.getvalue()]), media_type="text/csv", headers={"Content-Disposition": f"attachment; filename=pledgebook-{event_id}.csv"})
+    for row in rows:
+        row["amount"], row["received"] = row["amount_minor"], row["received_minor"]
+    return csv_response(f"pledgebook-register-{file_slug(event)}.csv",
+                        ["id", "heard_name", "matched_name", "amount", "currency", "item", "received", "state", "reason", "live_text", "recheck_text", "created_at", "updated_at"], rows)
 
 
-@app.exception_handler(RuntimeError)
-async def runtime_error(_, exc: RuntimeError):
-    return JSONResponse(status_code=503, content={"error": str(exc)})
+@app.get("/api/events/{event_id}/settlement.csv")
+async def export_settlement(event_id: str, request: Request):
+    event, _ = auth.require_event(request, event_id, "export")
+    return csv_response(f"pledgebook-settlement-{file_slug(event)}.csv",
+                        ["pledge_id", "guest", "phone", "email", "amount", "currency", "item", "received", "outstanding", "state", "promised_date", "last_outcome", "last_contact", "follow_up"],
+                        settlement_rows(event_id))
+
+
+@app.get("/api/events/{event_id}/activity.csv")
+async def export_activity(event_id: str, request: Request):
+    event, _ = auth.require_event(request, event_id, "export")
+    rows = [activity_row(row) for row in database.all("SELECT * FROM audit_log WHERE event_id = ? ORDER BY id", (event_id,))]
+    for row in rows:
+        row["details"] = json.dumps(row["details"], ensure_ascii=False)
+    return csv_response(f"pledgebook-activity-{file_slug(event)}.csv", ["id", "created_at", "label", "actor", "pledge_id", "details"], rows)

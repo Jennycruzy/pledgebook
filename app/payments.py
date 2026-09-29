@@ -1,6 +1,6 @@
 """Small, server-only Paystack integration.
 
-The browser never receives the Paystack secret.  The server creates a test
+The browser never receives the Paystack secret.  The server creates a
 checkout, stores its reference, and verifies the transaction again before a
 pledge can become redeemed.
 """
@@ -26,7 +26,7 @@ class PaystackError(RuntimeError):
 
 def _headers(settings: Settings) -> dict[str, str]:
     if not settings.paystack_secret_key:
-        raise PaystackError("Paystack test mode is not configured.")
+        raise PaystackError("Paystack is not configured.")
     return {
         "Authorization": f"Bearer {settings.paystack_secret_key}",
         "Content-Type": "application/json",
@@ -50,8 +50,9 @@ async def initialize_transaction(
     email: str,
     reference: str,
     metadata: dict[str, Any],
+    callback_url: str = "",
 ) -> dict[str, Any]:
-    """Create a Paystack test checkout for a whole-naira pledge amount."""
+    """Create a Paystack checkout for a whole-naira pledge amount."""
 
     if amount_naira <= 0:
         raise PaystackError("The pledge amount must be greater than zero.")
@@ -64,6 +65,8 @@ async def initialize_transaction(
         "reference": reference,
         "metadata": json.dumps(metadata, ensure_ascii=False),
     }
+    if callback_url:
+        payload["callback_url"] = callback_url
     try:
         async with httpx.AsyncClient(timeout=30) as client:
             response = await client.post(f"{PAYSTACK_BASE}/transaction/initialize", headers=_headers(settings), json=payload)
@@ -72,7 +75,7 @@ async def initialize_transaction(
     body = _json(response)
     if response.status_code >= 400 or body.get("status") is not True:
         message = str(body.get("message") or f"HTTP {response.status_code}")
-        raise PaystackError(f"Paystack could not create the test payment link: {message}")
+        raise PaystackError(f"Paystack could not create the payment link: {message}")
     data = body.get("data")
     if not isinstance(data, dict) or not data.get("authorization_url") or not data.get("reference"):
         raise PaystackError("Paystack did not return a payment link and reference.")
