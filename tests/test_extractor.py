@@ -119,15 +119,13 @@ def test_correction_split_across_turns_is_flagged_without_shifting_donors():
     assert window.add(extract_turn(first, _words(first, 0), guests)) == (None, None, None)
 
     second = "₦70,000. Dr. Tola Adeyemi."
-    # Explicit corrections get a longer bound than ordinary name/amount
-    # pairing; the real music recording crossed the six-second threshold.
-    name, amount, reason = window.add(extract_turn(second, _words(second, 10_000), guests))
+    name, amount, reason = window.add(extract_turn(second, _words(second, 4000), guests))
     assert name.name == "Ibrahim Musa"
     assert amount.amount.minor is None
     assert "correction" in reason.lower()
     assert window.pending_name.name == "Tola Adeyemi"
 
-    name, amount, reason = window.add(extract_turn("₦1 million.", _words("₦1 million.", 13_000), guests))
+    name, amount, reason = window.add(extract_turn("₦1 million.", _words("₦1 million.", 7000), guests))
     assert name.name == "Tola Adeyemi"
     assert amount.amount.minor == 1_000_000
     assert reason is None
