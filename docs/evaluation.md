@@ -13,6 +13,11 @@ amounts in one breath. No line was credited to the wrong guest. This is one
 recording read by one person, so it is engineering evidence, not an accuracy
 result.
 
+A later run of the same recording with a larger guest list exposed a
+**wrong amount** credited to the right guest: an amount that closed one
+announcement was paired with the next donor's name. That is fixed and kept as
+a regression test; the details are in `docs/verification.md`.
+
 ## Running the benchmark
 
 The kit is in `eval/benchmark/`: a 20-name guest list with deliberate near
