@@ -194,6 +194,7 @@ def _amount_before_name(text: str, phrase: str, heard_name: Optional[str], match
 NO_AMOUNT = "A name was heard without a clear amount. Was this a pledge?"
 CORRECTION_PENDING = "A correction was heard across two speech turns — please check both amounts."
 CORRECTION_CUE = re.compile(r"\b(?:sorry|correction|rather|I mean)\s*[.!?]*$", re.IGNORECASE)
+CORRECTION_GAP_MS = 15_000
 
 
 def split_turn(turn: Turn) -> tuple[Turn, Turn]:
@@ -285,15 +286,12 @@ class TurnWindow:
         name_turn = turn if turn.name else None
         amount_turn = turn if turn.amount.is_clear else None
 
-        if self.pending_correction and not self._fresh(turn, self.pending_correction):
-            self._drop_correction()
-        if self.pending_name and not self._fresh(turn, self.pending_name):
-            self._drop_name()
-        if self.pending_amount and not self._fresh(turn, self.pending_amount):
-            self._drop_amount()
-
+        # An explicit "sorry" can be followed by a deliberate pause before
+        # the corrected amount.  Resolve it before applying the shorter
+        # ordinary donor-pairing window.
         if self.pending_correction:
-            if amount_turn or turn.amount.reason:
+            correction_gap = turn.start_ms - self.pending_correction.end_ms
+            if (amount_turn or turn.amount.reason) and correction_gap <= CORRECTION_GAP_MS:
                 prior = self.pending_correction
                 self.pending_correction = None
                 combined = replace(
@@ -307,6 +305,10 @@ class TurnWindow:
                 )
                 return prior, combined, CORRECTION_PENDING
             self._drop_correction()
+        if self.pending_name and not self._fresh(turn, self.pending_name):
+            self._drop_name()
+        if self.pending_amount and not self._fresh(turn, self.pending_amount):
+            self._drop_amount()
 
         # First try same-turn pairing. A turn containing several names or
         # amounts has already been made ambiguous by extract_turn and will
