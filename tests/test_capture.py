@@ -82,6 +82,20 @@ def test_every_pledge_keeps_an_evidence_clip(owner, event, monkeypatch):
     audio.close()
 
 
+def test_amount_only_evidence_keeps_six_seconds_of_earlier_context(owner, event, monkeypatch):
+    monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
+    audio = fake_session(event["id"])
+    heard = turn("₦60,000.", [], 10_000)
+    pledge_id = run(create_live_pledge(event["id"], audio, heard.text, heard, heard))
+    row = database.one("SELECT audio_path, state FROM pledges WHERE id = ?", (pledge_id,))
+    import wave
+    with wave.open(row["audio_path"], "rb") as clip:
+        duration = clip.getnframes() / clip.getframerate()
+    assert row["state"] == "flagged"
+    assert duration >= 6.5
+    audio.close()
+
+
 def test_both_passes_and_timings_are_kept(owner, event, monkeypatch):
     monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
     guest = add_guest(owner, event["id"], name="Chief Emeka Obi")

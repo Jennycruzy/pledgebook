@@ -110,6 +110,39 @@ def test_corrected_amount_before_next_name_stays_with_pending_donor():
     assert reason is None
 
 
+def test_correction_split_across_turns_is_flagged_without_shifting_donors():
+    """Exact speaker-1 shape: "sorry" ended one turn and its amount began the next."""
+
+    guests = [{"id": 1, "name": "Ibrahim Musa"}, {"id": 2, "name": "Tola Adeyemi"}]
+    window = TurnWindow()
+    first = "Alhaji Ibrahim Musa. ₦50,000. Sorry."
+    assert window.add(extract_turn(first, _words(first, 0), guests)) == (None, None, None)
+
+    second = "₦70,000. Dr. Tola Adeyemi."
+    name, amount, reason = window.add(extract_turn(second, _words(second, 4000), guests))
+    assert name.name == "Ibrahim Musa"
+    assert amount.amount.minor is None
+    assert "correction" in reason.lower()
+    assert window.pending_name.name == "Tola Adeyemi"
+
+    name, amount, reason = window.add(extract_turn("₦1 million.", _words("₦1 million.", 7000), guests))
+    assert name.name == "Tola Adeyemi"
+    assert amount.amount.minor == 1_000_000
+    assert reason is None
+
+
+def test_unfinished_correction_is_flushed_for_a_person():
+    guests = [{"id": 1, "name": "Ibrahim Musa"}]
+    window = TurnWindow()
+    text = "Alhaji Ibrahim Musa, ₦50,000, sorry."
+    window.add(extract_turn(text, _words(text, 0), guests))
+    left = window.flush()
+    assert len(left) == 1
+    assert left[0].name == "Ibrahim Musa"
+    assert left[0].amount.minor is None
+    assert "correction" in left[0].amount.reason.lower()
+
+
 def test_amount_before_next_name_closes_pending_announcement_without_a_cascade():
     """Regression from script C: Bukola's amount and the following Chief shared a turn."""
 

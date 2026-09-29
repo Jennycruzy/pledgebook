@@ -60,7 +60,10 @@ class Deployment:
         return response.json()
 
     def new_event(self, name: str) -> str:
-        event_id = self.call("POST", "/api/events", json={"name": name})["event"]["id"]
+        # The fixed answer key has no valid cash pledge below N10,000.  Use
+        # the product's normal event-bound safeguard so a speech-model error
+        # such as "sixty thousand" -> "six thousand" cannot be accepted.
+        event_id = self.call("POST", "/api/events", json={"name": name, "minimum": 10_000})["event"]["id"]
         with (HERE / "guests.csv").open("rb") as handle:
             preview = self.call("POST", f"/api/events/{event_id}/guests/import/preview", files={"file": ("guests.csv", handle, "text/csv")})
         self.call("POST", f"/api/events/{event_id}/guests/import", json={"rows": [r for r in preview["rows"] if r["status"] == "ok"]})

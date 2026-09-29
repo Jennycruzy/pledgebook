@@ -192,6 +192,8 @@ def _amount_before_name(text: str, phrase: str, heard_name: Optional[str], match
 
 
 NO_AMOUNT = "A name was heard without a clear amount. Was this a pledge?"
+CORRECTION_PENDING = "A correction was heard across two speech turns — please check both amounts."
+CORRECTION_CUE = re.compile(r"\b(?:sorry|correction|rather|I mean)\s*[.!?]*$", re.IGNORECASE)
 
 
 def split_turn(turn: Turn) -> tuple[Turn, Turn]:
@@ -219,6 +221,7 @@ class TurnWindow:
         self.max_gap_ms = max_gap_ms
         self.pending_name: Optional[Turn] = None
         self.pending_amount: Optional[Turn] = None
+        self.pending_correction: Optional[Turn] = None
         self.unpaired: list[Turn] = []
 
     def _fresh(self, current: Turn, pending: Optional[Turn]) -> bool:
@@ -234,6 +237,14 @@ class TurnWindow:
             self.unpaired.append(self.pending_amount)
             self.pending_amount = None
 
+    def _drop_correction(self) -> None:
+        if self.pending_correction is not None:
+            self.unpaired.append(replace(
+                self.pending_correction,
+                amount=Amount(None, None, None, CORRECTION_PENDING),
+            ))
+            self.pending_correction = None
+
     def take_unpaired(self) -> list[Turn]:
         names, self.unpaired = self.unpaired, []
         return names
@@ -243,6 +254,7 @@ class TurnWindow:
 
         self._drop_name()
         self._drop_amount()
+        self._drop_correction()
         return self.take_unpaired()
 
     def add(self, turn: Turn) -> tuple[Optional[Turn], Optional[Turn], Optional[str]]:
@@ -273,10 +285,28 @@ class TurnWindow:
         name_turn = turn if turn.name else None
         amount_turn = turn if turn.amount.is_clear else None
 
+        if self.pending_correction and not self._fresh(turn, self.pending_correction):
+            self._drop_correction()
         if self.pending_name and not self._fresh(turn, self.pending_name):
             self._drop_name()
         if self.pending_amount and not self._fresh(turn, self.pending_amount):
             self._drop_amount()
+
+        if self.pending_correction:
+            if amount_turn or turn.amount.reason:
+                prior = self.pending_correction
+                self.pending_correction = None
+                combined = replace(
+                    turn,
+                    text=f"{prior.text} {turn.text}".strip(),
+                    name=None,
+                    name_match=None,
+                    amount=Amount(None, None, None, CORRECTION_PENDING),
+                    start_ms=min(prior.start_ms, turn.start_ms),
+                    split_at=None,
+                )
+                return prior, combined, CORRECTION_PENDING
+            self._drop_correction()
 
         # First try same-turn pairing. A turn containing several names or
         # amounts has already been made ambiguous by extract_turn and will
@@ -284,6 +314,9 @@ class TurnWindow:
         if name_turn and amount_turn:
             self._drop_name()
             self._drop_amount()
+            if CORRECTION_CUE.search(turn.text):
+                self.pending_correction = turn
+                return None, None, None
             return name_turn, amount_turn, None
         if name_turn and not amount_turn and "More than one amount" in (turn.amount.reason or ""):
             self._drop_name()

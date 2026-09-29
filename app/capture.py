@@ -330,7 +330,13 @@ async def create_live_pledge(event_id: str, capture: CaptureAudio, live_text: st
          amount.minor, amount.currency, amount.item, live_text, start_ms, end_ms, state, reason, recognised_from, recognised_at,
          capture.capture_id, amount.minor, guest_id, capture.wall_time(end_ms), now(), now()),
     )
-    clip = save_pledge_clip(event_id, pledge_id, capture, start_ms - 500, end_ms + 500)
+    # Realtime can occasionally emit an amount-only turn after omitting the
+    # donor's preceding words.  Give Sync enough earlier context to recover
+    # that name.  A recovered name still goes to a person because the two
+    # passes disagreed; this only prevents the evidence from being needlessly
+    # truncated to the amount.
+    lookback_ms = 6000 if not name_turn.name else 500
+    clip = save_pledge_clip(event_id, pledge_id, capture, start_ms - lookback_ms, end_ms + 500)
     if clip:
         database.execute("UPDATE pledges SET audio_path = ? WHERE id = ?", (str(clip), pledge_id))
     database.audit(event_id, "live_pledge", {"text": live_text, "state": state, "guest_id": guest_id}, pledge_id,
