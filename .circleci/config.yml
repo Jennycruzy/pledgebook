@@ -1,9 +1,9 @@
 version: 2.1
 
 jobs:
-  python-checks:
+  checks:
     docker:
-      - image: cimg/python:3.11
+      - image: cimg/python:3.11-node
     steps:
       - checkout
       - run:
@@ -15,12 +15,6 @@ jobs:
       - run:
           name: Compile Python sources
           command: python -m compileall -q app scripts
-
-  browser-checks:
-    docker:
-      - image: cimg/node:20.18.1
-    steps:
-      - checkout
       - run:
           name: Check browser JavaScript
           command: node --check web/app.js && node --check web/pay.js
@@ -28,5 +22,4 @@ jobs:
 workflows:
   checks:
     jobs:
-      - python-checks
-      - browser-checks
+      - checks
