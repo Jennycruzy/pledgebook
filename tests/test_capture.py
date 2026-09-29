@@ -166,3 +166,30 @@ def test_a_flagged_recheck_never_overwrites_the_live_amount(owner, event, monkey
     row = database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))
     assert row["state"] == "flagged" and row["amount_minor"] == 250_000 and row["recheck_amount_minor"] == 250
     audio.close()
+
+
+def test_spoken_correction_guards_the_following_sequence(owner, event, monkeypatch):
+    monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
+    one = add_guest(owner, event["id"], name="Ibrahim Musa")
+    two = add_guest(owner, event["id"], name="Tola Adeyemi")
+    audio = fake_session(event["id"])
+
+    corrected = live(event["id"], audio, "Alhaji Ibrahim Musa 50,000 naira, sorry.", 1000, [one, two])
+    shifted = live(event["id"], audio, "Dr Tola Adeyemi 70,000 naira", 9000, [one, two])
+    rows = {row["id"]: row for row in database.all("SELECT * FROM pledges WHERE event_id = ?", (event["id"],))}
+    assert rows[corrected]["state"] == "flagged"
+    assert rows[shifted]["state"] == "flagged"
+    assert "shifted" in rows[shifted]["reason"]
+    audio.close()
+
+
+def test_spoken_correction_guard_expires_after_a_minute(owner, event, monkeypatch):
+    monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
+    one = add_guest(owner, event["id"], name="Ibrahim Musa")
+    two = add_guest(owner, event["id"], name="Tola Adeyemi")
+    audio = fake_session(event["id"])
+
+    live(event["id"], audio, "Alhaji Ibrahim Musa 50,000 naira, sorry.", 1000, [one, two])
+    later = live(event["id"], audio, "Dr Tola Adeyemi 70,000 naira", 70_000, [one, two])
+    assert database.one("SELECT state FROM pledges WHERE id = ?", (later,))["state"] == "provisional"
+    audio.close()

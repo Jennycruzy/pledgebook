@@ -263,6 +263,8 @@ def bare_small_amount(amount, text: str) -> bool:
 
 
 ADD_ON = re.compile(r"\b(?:add(?:ing)?|another|plus|extra|in addition)\b", re.IGNORECASE)
+SPOKEN_CORRECTION = re.compile(r"\b(?:sorry|correction|rather|I mean)\s*[.!?]*$", re.IGNORECASE)
+CORRECTION_GUARD_MS = 60_000
 REPEAT_WINDOW_MS = 60000
 
 
@@ -292,6 +294,21 @@ async def create_live_pledge(event_id: str, capture: CaptureAudio, live_text: st
         state, reason = "flagged", "Amount is above this event's allowed maximum."
     start_ms = min(name_turn.start_ms, amount_turn.start_ms)
     end_ms = max(name_turn.end_ms, amount_turn.end_ms)
+
+    # A correction cue can cause Realtime to shift every later amount onto
+    # the next donor, and its exact turn boundaries vary between identical
+    # runs.  Enforce the safety boundary here, after extraction: the cue and
+    # the short sequence following it require an usher, regardless of how the
+    # speech service partitioned those turns.
+    correction_here = bool(SPOKEN_CORRECTION.search(live_text))
+    recent_corrections = database.all(
+        "SELECT live_text, source_end_ms FROM pledges WHERE event_id = ? AND capture_id = ? "
+        "AND source_end_ms IS NOT NULL AND source_end_ms >= ? ORDER BY id DESC",
+        (event_id, capture.capture_id, max(0, start_ms - CORRECTION_GUARD_MS)),
+    )
+    correction_before = any(SPOKEN_CORRECTION.search(row["live_text"] or "") for row in recent_corrections)
+    if correction_here or correction_before:
+        state, reason = "flagged", "A spoken correction may have shifted the following amounts — please check this sequence."
     guest_id = name_match.guest_id if name_match and name_match.kind == "matched" else None
     recognised_from = recognised_at = None
     if guest_id:
