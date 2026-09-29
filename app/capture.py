@@ -177,6 +177,10 @@ async def confirm_pledge(event_id: str, pledge_id: int) -> None:
         amount = recheck.amount
         anonymous = pledge.get("heard_name") == "Anonymous donor"
         already_flagged = pledge["state"] == "flagged"
+        reviewed = database.one("SELECT 1 FROM audit_log WHERE pledge_id = ? AND action = 'usher_review' LIMIT 1", (pledge_id,))
+        if reviewed:
+            await record_recheck_after_review(event_id, pledge, text, words, recheck, elapsed_ms)
+            return
         if not amount.is_clear:
             state, reason = "flagged", amount.reason or "Amount unclear — please check the recording."
         elif pledge.get("currency") and amount.currency and pledge["currency"] != amount.currency:
@@ -222,6 +226,27 @@ async def confirm_pledge(event_id: str, pledge_id: int) -> None:
         database.execute("UPDATE pledges SET reason = ?, updated_at = ? WHERE id = ?", (f"Not rechecked — {exc}", now(), pledge_id))
         database.audit(event_id, "recheck_failed", {"error": str(exc)}, pledge_id)
     await notify(event_id, "pledge", pledge_id=pledge_id)
+
+
+async def record_recheck_after_review(event_id: str, pledge: dict, text: str, words: list, recheck, elapsed_ms: float) -> None:
+    """A person already decided this line. Keep their decision unless the recheck disagrees."""
+
+    recheck_guest = recheck.name_match.guest_id if recheck.name_match else None
+    amount = recheck.amount
+    problems = []
+    if recheck_guest and pledge["guest_id"] and recheck_guest != pledge["guest_id"]:
+        problems.append(f"the recheck heard {recheck.name_match.guest_name}")
+    if amount.minor is not None and pledge["amount_minor"] is not None and amount.minor != pledge["amount_minor"]:
+        problems.append(f"the recheck heard {amount.minor:,}")
+    state, reason = pledge["state"], pledge["reason"]
+    if problems and state not in ("rejected", "redeemed"):
+        state, reason = "flagged", "A person decided this line, but " + " and ".join(problems) + ". Please check again."
+    database.execute(
+        "UPDATE pledges SET recheck_text = ?, recheck_amount_minor = ?, recheck_guest_id = ?, recheck_ms = ?, rechecked_at = ?, state = ?, reason = ?, updated_at = ? WHERE id = ?",
+        (text, amount.minor, recheck_guest, elapsed_ms, now(), state, reason, now(), pledge["id"]),
+    )
+    database.audit(event_id, "rechecked", {"text": text, "elapsed_ms": elapsed_ms, "state": state, "reason": reason, "after_review": True},
+                   pledge["id"], actor={"label": "AssemblyAI Sync"})
 
 
 ADD_ON = re.compile(r"\b(?:add(?:ing)?|another|plus|extra|in addition)\b", re.IGNORECASE)

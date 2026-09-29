@@ -100,3 +100,27 @@ def test_both_passes_and_timings_are_kept(owner, event, monkeypatch):
     assert row["state"] == "corrected" and row["amount_minor"] == 250_000
     assert row["recheck_ms"] == 812.5 and row["spoken_end_at"] and row["rechecked_at"]
     audio.close()
+
+
+def _sync_hearing(text):
+    async def fake_sync(settings, path, terms):
+        return {"text": text, "words": [{"text": w, "start": 500 + i * 300, "end": 750 + i * 300} for i, w in enumerate(text.split())]}, 900.0
+    return fake_sync
+
+
+def test_a_late_recheck_does_not_undo_a_person_unless_it_disagrees(owner, event, monkeypatch):
+    monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
+    audio = fake_session(event["id"])
+    walk_in = live(event["id"], audio, "Chief Nwachukwu Ezenwa 100,000 naira", 2000, [])
+    resolved = owner.post(f"/api/events/{event['id']}/pledges/{walk_in}/resolve",
+                          {"action": "walk_in", "walk_in_title": "Chief", "walk_in_name": "Nwachukwu Ezenwa"})
+    assert resolved.status_code == 200
+    monkeypatch.setattr(capture_module, "sync_transcribe", _sync_hearing("Chief Nwachukwu Ezenwa 100,000 naira"))
+    run(confirm_pledge(event["id"], walk_in))
+    row = database.one("SELECT * FROM pledges WHERE id = ?", (walk_in,))
+    assert row["state"] == "confirmed" and row["recheck_amount_minor"] == 100_000
+    monkeypatch.setattr(capture_module, "sync_transcribe", _sync_hearing("Chief Nwachukwu Ezenwa 10,000 naira"))
+    run(confirm_pledge(event["id"], walk_in))
+    row = database.one("SELECT * FROM pledges WHERE id = ?", (walk_in,))
+    assert row["state"] == "flagged" and "10,000" in row["reason"]
+    audio.close()
