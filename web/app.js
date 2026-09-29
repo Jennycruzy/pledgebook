@@ -466,7 +466,7 @@ function reviewRow(p) {
     ${p.has_audio ? `<audio controls preload="none" src="/api/events/${state.eventId}/pledges/${p.id}/audio"></audio>` : '<p class="muted">No audio clip for this line.</p>'}</div>
     <div class="review-actions"><label class="guest-picker">Choose the guest<input list="guest-options" data-guest-search="${p.id}" placeholder="Type a name"></label>
       <button data-review-guest="${p.id}">Assign guest</button><button data-walk-in="${p.id}">New walk-in</button><button data-anonymous="${p.id}">Anonymous</button>
-      <button data-fix-amount="${p.id}">Enter amount</button>${earlier ? `<button data-keep="${p.id}">Keep both</button><button data-replace="${p.id}">Replace #${earlier[1]}</button>` : ''}
+      ${p.recheck_amount_minor && p.recheck_amount_minor !== p.amount ? `<button data-use-recheck="${p.id}" data-value="${p.recheck_amount_minor}">Use ${money(p.recheck_amount_minor)} from the recheck</button>` : ''}<button data-fix-amount="${p.id}">Enter amount</button>${earlier ? `<button data-keep="${p.id}">Keep both</button><button data-replace="${p.id}">Replace #${earlier[1]}</button>` : ''}
       <button class="danger-text" data-reject="${p.id}">Not a pledge</button></div></div>`;
 }
 
@@ -683,6 +683,7 @@ document.addEventListener('click', async (event) => {
       if (data) return resolve(d.walkIn, { action: 'walk_in', ...data });
       return;
     }
+    if (d.useRecheck) return resolve(d.useRecheck, { action: 'amount', amount: Number(d.value) });
     if (d.anonymous) return resolve(d.anonymous, { action: 'anonymous' });
     if (d.keep) return resolve(d.keep, { action: 'keep' });
     if (d.replace) return resolve(d.replace, { action: 'replace_earlier' });

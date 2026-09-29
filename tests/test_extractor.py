@@ -61,3 +61,38 @@ def test_same_turn_multiple_amounts_are_returned_for_a_visible_flag():
     name_turn, amount_turn, reason = TurnWindow().add(turn)
     assert name_turn is not None and amount_turn is not None
     assert "More than one amount" in reason
+
+
+def _words(text, start):
+    return [{"text": w, "start": start + i * 300, "end": start + i * 300 + 250} for i, w in enumerate(text.split())]
+
+
+def test_an_amount_that_closes_the_last_announcement_is_not_given_to_the_next_name():
+    # Real Realtime segmentation from the owner's recording: the previous
+    # donor's amount and the next donor's name arrived in one turn.
+    guests = [{"id": 1, "name": "Segun Ogunleye"}, {"id": 2, "name": "Oluwaseun Adebayo"}]
+    window = TurnWindow()
+    window.add(extract_turn("Mrs. Oluwaseun Adebayo, ₦1 million.", _words("Mrs. Oluwaseun Adebayo, ₦1 million.", 0), guests))
+    name, amount, _ = window.add(extract_turn("₦500,000. Brother Segun Ogunleye.", _words("₦500,000. Brother Segun Ogunleye.", 4000), guests))
+    assert name is None and amount is None
+    stray = window.take_unpaired()
+    assert [(t.name, t.amount.minor) for t in stray] == [(None, 500_000)]
+    name, amount, _ = window.add(extract_turn("₦10,000. Now, so we do.", _words("₦10,000. Now, so we do.", 8000), guests))
+    assert name.name == "Segun Ogunleye" and amount.amount.minor == 10_000
+
+
+def test_amount_then_from_name_stays_one_pledge():
+    guests = [{"id": 1, "name": "Segun Ogunleye"}]
+    turn = extract_turn("Five hundred thousand naira from Brother Segun Ogunleye!", _words("x", 0), guests)
+    assert turn.split_at is None
+    name, amount, _ = TurnWindow().add(turn)
+    assert name.name == "Segun Ogunleye" and amount.amount.minor == 500_000
+
+
+def test_a_name_that_never_gets_an_amount_is_handed_back():
+    guests = [{"id": 1, "name": "Emeka Okonkwo"}]
+    window = TurnWindow()
+    window.add(extract_turn("Chief Emeka Okonkwo.", _words("Chief Emeka Okonkwo.", 0), guests))
+    left = window.flush()
+    assert [t.name for t in left] == ["Emeka Okonkwo"]
+    assert "without a clear amount" in left[0].amount.reason

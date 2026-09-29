@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 from typing import Iterable, Optional
 
@@ -15,6 +15,10 @@ class Turn:
     name: Optional[str]
     amount: Amount
     name_match: Optional[NameMatch]
+    # Set when the amount was spoken before the name in the same turn, for
+    # example "₦500,000. Brother Segun." The amount usually closes the
+    # previous announcement, so the two are not paired with each other.
+    split_at: Optional[int] = None
 
 
 def _name_phrase(text: str) -> Optional[str]:
@@ -129,38 +133,133 @@ def extract_turn(text: str, words: Optional[list[dict]], guests: Iterable[dict])
         heard_name = _name_phrase(text)
         if heard_name and matched is None:
             matched = match_name(heard_name, guest_rows)
-    amount = parse_amount(_amount_phrase(text))
-    return Turn(text, words, start_ms, end_ms, heard_name, amount, matched)
+    phrase = _amount_phrase(text)
+    amount = parse_amount(phrase)
+    turn = Turn(text, words, start_ms, end_ms, heard_name, amount, matched)
+    turn.split_at = _amount_before_name(text, phrase, heard_name, matched_guests)
+    return turn
+
+
+NAME_START = re.compile(
+    r"\b(?:anonymous|a son of the soil|a daughter of the soil|son of the soil|daughter of the soil|Chief|Mrs\.?|Mr\.?|Barrister|Alhaji|Hajia|Deaconess|Deacon|Engineer|Dr\.?|Pastor|Prof\.?|Brother|Sister|Mama|Papa|Evangelist)\b",
+    re.IGNORECASE,
+)
+
+
+def _amount_before_name(text: str, phrase: str, heard_name: Optional[str], matched_guests: list[dict]) -> Optional[int]:
+    """Return where the name starts when a clear amount comes first in the turn."""
+
+    if not heard_name or not phrase or phrase == text or phrase.startswith("__"):
+        return None
+    amount_at = text.find(phrase)
+    if amount_at < 0:
+        return None
+    candidates = []
+    title = NAME_START.search(text, amount_at + len(phrase))
+    if title:
+        candidates.append(title.start())
+    for guest in matched_guests:
+        first = guest["name"].split()[0]
+        found = re.search(re.escape(first), text[amount_at + len(phrase):], re.IGNORECASE)
+        if found:
+            candidates.append(amount_at + len(phrase) + found.start())
+    if not candidates:
+        return None
+    name_at = min(candidates)
+    if name_at <= amount_at or re.search(r"\b(?:from|by)\b", text[amount_at + len(phrase):name_at], re.IGNORECASE):
+        return None
+    # Only when the name really is not also before the amount.
+    before = text[:amount_at]
+    if NAME_START.search(before) or any(guest["name"].split()[0].lower() in before.lower() for guest in matched_guests):
+        return None
+    return name_at
+
+
+NO_AMOUNT = "A name was heard without a clear amount. Was this a pledge?"
+
+
+def split_turn(turn: Turn) -> tuple[Turn, Turn]:
+    """Split an amount-first turn into the closing amount and the next name."""
+
+    words_before = len(turn.text[:turn.split_at].split())
+    words = turn.words or []
+    boundary = words[words_before]["start"] if words_before < len(words) else turn.end_ms
+    last_amount_word = words[words_before - 1]["end"] if 0 < words_before <= len(words) else turn.start_ms
+    amount_part = replace(turn, text=turn.text[:turn.split_at].strip(), name=None, name_match=None, split_at=None,
+                          end_ms=int(last_amount_word), words=words[:words_before])
+    name_part = replace(turn, text=turn.text[turn.split_at:].strip(), amount=Amount(None, None, None, NO_AMOUNT), split_at=None,
+                        start_ms=int(boundary), words=words[words_before:])
+    return amount_part, name_part
 
 
 class TurnWindow:
+    """Pair names and amounts across adjacent final turns.
+
+    A name that never receives an amount is kept in `unpaired` so the caller
+    can show it to a person instead of letting it disappear.
+    """
+
     def __init__(self, max_gap_ms: int = 6000):
         self.max_gap_ms = max_gap_ms
         self.pending_name: Optional[Turn] = None
         self.pending_amount: Optional[Turn] = None
+        self.unpaired: list[Turn] = []
 
     def _fresh(self, current: Turn, pending: Optional[Turn]) -> bool:
         return pending is not None and current.start_ms - pending.end_ms <= self.max_gap_ms
 
+    def _drop_name(self) -> None:
+        if self.pending_name is not None:
+            self.unpaired.append(replace(self.pending_name, amount=Amount(None, None, None, NO_AMOUNT)))
+            self.pending_name = None
+
+    def _drop_amount(self) -> None:
+        if self.pending_amount is not None:
+            self.unpaired.append(self.pending_amount)
+            self.pending_amount = None
+
+    def take_unpaired(self) -> list[Turn]:
+        names, self.unpaired = self.unpaired, []
+        return names
+
+    def flush(self) -> list[Turn]:
+        """At the end of listening, hand back any name or amount still waiting."""
+
+        self._drop_name()
+        self._drop_amount()
+        return self.take_unpaired()
+
     def add(self, turn: Turn) -> tuple[Optional[Turn], Optional[Turn], Optional[str]]:
+        if turn.split_at is not None and turn.amount.is_clear:
+            amount_part, name_part = split_turn(turn)
+            result = self._add(amount_part)
+            # The amount closed an earlier announcement; it must not be
+            # paired with the name that follows it.
+            self._drop_amount()
+            self._drop_name()
+            self.pending_name = name_part
+            return result
+        return self._add(turn)
+
+    def _add(self, turn: Turn) -> tuple[Optional[Turn], Optional[Turn], Optional[str]]:
         name_turn = turn if turn.name else None
         amount_turn = turn if turn.amount.is_clear else None
 
         if self.pending_name and not self._fresh(turn, self.pending_name):
-            self.pending_name = None
+            self._drop_name()
         if self.pending_amount and not self._fresh(turn, self.pending_amount):
-            self.pending_amount = None
+            self._drop_amount()
 
         # First try same-turn pairing. A turn containing several names or
         # amounts has already been made ambiguous by extract_turn and will
         # not reach this branch.
         if name_turn and amount_turn:
-            self.pending_name = None
-            self.pending_amount = None
+            self._drop_name()
+            self._drop_amount()
             return name_turn, amount_turn, None
         if name_turn and not amount_turn and "More than one amount" in (turn.amount.reason or ""):
-            self.pending_name = None
-            self.pending_amount = None
+            self._drop_name()
+            self._drop_amount()
             return name_turn, turn, turn.amount.reason
 
         # Pair only adjacent final turns. This prevents an old name from
@@ -173,12 +272,12 @@ class TurnWindow:
             previous = self.pending_amount
             self.pending_amount = amount_turn
             if previous:
-                self.pending_amount = amount_turn
                 return None, previous, "Amount heard but the name is unclear."
         if name_turn and not amount_turn:
             if self.pending_amount:
                 prior = self.pending_amount
                 self.pending_amount = None
                 return name_turn, prior, None
+            self._drop_name()
             self.pending_name = name_turn
         return None, None, None

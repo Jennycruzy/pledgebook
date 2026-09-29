@@ -333,6 +333,7 @@ async def handle_turn(event_id: str, capture: CaptureAudio, window: TurnWindow, 
         return None
     turn = extract_turn(event.get("transcript") or "", event.get("words") or [], guests_for(event_id))
     name_turn, amount_turn, pairing_reason = window.add(turn)
+    await record_unpaired(event_id, capture, window.take_unpaired())
     if not name_turn or not amount_turn:
         # An amount with no usable name stays visible for an usher; it must
         # never disappear silently.
@@ -346,6 +347,13 @@ async def handle_turn(event_id: str, capture: CaptureAudio, window: TurnWindow, 
     combined = " ".join(dict.fromkeys(part for part in (name_turn.text, amount_turn.text) if part))
     await create_live_pledge(event_id, capture, combined, name_turn, amount_turn)
     return None
+
+
+async def record_unpaired(event_id: str, capture: CaptureAudio, turns: list) -> None:
+    """A name with no amount, or an amount with no name, becomes a line for a person."""
+
+    for turn in turns:
+        await create_live_pledge(event_id, capture, turn.text, turn, turn)
 
 
 class ListeningSession:
@@ -403,6 +411,10 @@ class ListeningSession:
             await asyncio.wait_for(asyncio.shield(self.reader), wait_seconds)
         except Exception:
             pass
+        try:
+            await record_unpaired(self.event_id, self.capture, self.window.flush())
+        except Exception as exc:
+            database.audit(self.event_id, "unpaired_lines_failed", {"error": str(exc)})
 
     async def close(self) -> None:
         remainder = int(round(self.capture.seconds)) - self.billed_seconds

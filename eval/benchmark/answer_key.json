@@ -1,0 +1,32 @@
+{
+  "about": "Expected outcome for every line in scripts.md. 'accept' means the right guest and amount should reach the ledger without a person; 'flag' means a person must be asked. Written before any benchmark recording was made; do not edit after seeing results.",
+  "scripts": {
+    "A": [
+      {"id": "A1", "guest": "Emeka Okonkwo", "amount": 250000, "expect": "accept", "tests": "compound spoken amount"},
+      {"id": "A2", "guest": "Ngozi Eze", "amount": 100000, "expect": "accept"},
+      {"id": "A3", "guest": "Chinedu Okafor", "amount": 50000, "expect": "accept", "tests": "near name: Chinedu Okoro"},
+      {"id": "A4", "guest": "Funmilayo Adeyemi", "amount": 75000, "expect": "accept", "tests": "near name: Funmilayo Adebayo"},
+      {"id": "A5", "guest": "Ibrahim Musa", "amount": null, "expect": "flag", "tests": "self-correction: two amounts in one breath"},
+      {"id": "A6", "guest": "Tola Adeyemi", "amount": 1000000, "expect": "accept", "tests": "shared surname with A4"},
+      {"id": "A7", "guest": "Segun Ogunleye", "amount": 20000, "expect": "accept"},
+      {"id": "A8", "guest": "Tunde Bakare", "amount": 150000, "expect": "accept"}
+    ],
+    "B": [
+      {"id": "B1", "guest": "Kemi Oladipo", "amount": 200000, "expect": "accept"},
+      {"id": "B2", "repeat_of": "B1", "expect": "not_counted_twice", "tests": "MC repeats the announcement"},
+      {"id": "B3", "guest": "Emeka Okonkwo", "amount": 50000, "expect": "accept", "tests": "add-on pledge from a guest already pledged in script A (separate event, so a first pledge here)"},
+      {"id": "B4", "guest": null, "walk_in": "Obinna Nwosu", "amount": 30000, "expect": "flag", "tests": "walk-in not on the list"},
+      {"id": "B5", "anonymous": true, "amount": 500000, "expect": "accept", "tests": "anonymous donor"},
+      {"id": "B6", "guest": "Blessing Okoro", "item": "bag of cement", "expect": "accept", "tests": "in-kind gift"},
+      {"id": "B7", "guest": "Aisha Bello", "amount": 250000, "expect": "accept", "tests": "quarter of a million"},
+      {"id": "B8", "guest": "Chinedu Okoro", "amount": 10000, "expect": "accept", "tests": "near name: Chinedu Okafor"}
+    ],
+    "C": [
+      {"id": "C1", "guest": null, "walk_in": "Nwachukwu Ezenwa", "amount": 100000, "expect": "flag", "learn": {"title": "Chief", "name": "Nwachukwu Ezenwa", "match": "ezenwa|nwachukwu|ezenva|nwachuku"}, "tests": "unlisted name; the runner acts as the usher and adds the walk-in while the session is still open"},
+      {"id": "C2", "guest": "Yemi Olatunji", "amount": 40000, "expect": "accept"},
+      {"id": "C3", "guest": "Chioma Nwankwo", "amount": 15000, "expect": "accept"},
+      {"id": "C4", "guest": "Bukola Ajayi", "amount": 60000, "expect": "accept", "tests": "near name: Babatunde Ajayi"},
+      {"id": "C5", "guest": "Nwachukwu Ezenwa", "amount": 50000, "expect": "accept", "learned_from": "C1", "tests": "second mention after the correction, same listening session"}
+    ]
+  }
+}
