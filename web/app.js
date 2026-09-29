@@ -1,11 +1,12 @@
-const state = { event: null, media: null, audio: null, worklet: null, socket: null, source: null, stream: null, selectedPledge: null, voiceSocket: null, voiceAudio: null, voiceWorklet: null, voiceSource: null, voiceStream: null, voicePlayback: null, voiceNextTime: 0, voicePendingTools: [], voiceCallId: null, selfGuestId: Number(localStorage.getItem('pledgebook_self_guest_id') || 0), usherOnly: new URLSearchParams(location.search).get('view') === 'usher' };
+const state = { event: null, media: null, audio: null, worklet: null, socket: null, source: null, stream: null, micPhase: 'idle', selectedPledge: null, voiceSocket: null, voiceAudio: null, voiceWorklet: null, voiceSource: null, voiceStream: null, voicePlayback: null, voiceNextTime: 0, voicePendingTools: [], voiceCallId: null, usherOnly: new URLSearchParams(location.search).get('view') === 'usher' };
 const $ = (id) => document.getElementById(id);
 document.querySelector('input[name="event_date"]').value = new Date().toISOString().slice(0, 10);
 const money = (value, currency = 'NGN') => currency === 'NGN' || !currency ? `₦${Number(value || 0).toLocaleString('en-NG')}` : `${currency} ${Number(value || 0).toLocaleString()}`;
 const esc = (value) => String(value ?? '').replace(/[&<>"']/g, (char) => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#039;'}[char]));
 const shortTime = (value) => value ? new Date(value).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'}) : '';
-function showError(message) { $('error').textContent = message; $('error').hidden = false; }
+function showError(message) { $('error').textContent = message; $('error').hidden = false; window.clearTimeout(showError.timer); showError.timer = window.setTimeout(clearError, 8000); }
 function clearError() { $('error').hidden = true; }
+function setConnection(label, mode = '') { $('connection').className = `connection ${mode}`; $('connection').innerHTML = `<span class="status-dot"></span><span>${esc(label)}</span>`; }
 async function api(url, options = {}) { const headers = {'Content-Type':'application/json', ...(options.headers || {})}; if (options.body instanceof FormData) delete headers['Content-Type']; const response = await fetch(url, {...options, headers}); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.detail || body.error || `Request failed (${response.status})`); return body; }
 
 function render() {
@@ -13,23 +14,24 @@ function render() {
   const {event, pledges, guests, totals, payments = {}} = state.event;
   $('event-title').textContent = event.name;
   $('event-label').textContent = `${event.organisation} · ${event.event_date}`;
+  $('event-mode').textContent = event.demo ? 'Demo workspace' : (event.status === 'live' ? 'Live event' : 'Event setup');
   $('total').textContent = money(totals.pledged);
   $('received-total').textContent = money(totals.received);
   $('target-label').textContent = event.target_minor ? `Target ${money(event.target_minor)}` : 'No target set';
   $('progress-bar').style.width = `${event.target_minor ? Math.min(100, totals.pledged / event.target_minor * 100) : 0}%`;
   const limits = state.event.limits || {};
-  $('limits-label').textContent = event.demo ? `Private demo limits: ${limits.audio_seconds_used || 0}/${limits.audio_seconds_limit || 180} seconds · ${limits.calls_used || 0}/${limits.calls_limit || 2} calls · deleted after 24 hours.` : '';
+  $('limits-label').textContent = event.demo ? `Demo usage: ${limits.audio_seconds_used || 0}/${limits.audio_seconds_limit || 180} seconds of audio` : '';
   $('guest-count').textContent = `${guests.length} guests loaded`;
-  if ($('demo-banner')) $('demo-banner').textContent = payments.configured
-    ? 'Private demo. All names and amounts are invented. Your recording is sent to AssemblyAI. Payments use Paystack Test Mode only; no real money moves.'
-    : 'Private demo. All names and amounts are invented. Your recording is sent to AssemblyAI. Payment links are unavailable until Paystack Test Mode is configured.';
+  $('demo-banner').hidden = !event.demo;
+  $('demo-banner').textContent = 'Sample workspace: fictional guests, three minutes of audio, two follow-up calls, and automatic deletion after 24 hours. No real money moves.';
+  $('sample-audio').hidden = !event.demo;
   if ($('payment-note')) $('payment-note').textContent = payments.configured
     ? 'The assistant may speak with a clearly disclosed generated voice. It creates a Paystack Test Mode link only after identity is confirmed.'
     : 'The assistant may speak with a clearly disclosed generated voice. Payment links are unavailable until Paystack Test Mode is configured.';
   const keyTerms = state.event.key_terms || {included_count:0, overflow_count:0, characters:0, term_limit:100, character_limit:8000};
   $('keyterms-preview').innerHTML = `<strong>${keyTerms.included_count} names are being listened for</strong><br><span class="muted">${keyTerms.characters}/${keyTerms.character_limit} name characters used.</span>${keyTerms.overflow_count ? `<br><span class="muted">${keyTerms.overflow_count} names are beyond the verified limit and are shown here so they are never hidden.</span>` : ''}`;
-  const selfGuest = guests.find((g) => g.id === state.selfGuestId) || (guests.length === 1 ? guests[0] : null);
-  $('self-script-line').textContent = selfGuest ? `${[selfGuest.title, selfGuest.name].filter(Boolean).join(' ')} — one hundred thousand naira!` : 'Add yourself in Guest list to put your name here.';
+  const soundCheckGuest = guests[0];
+  $('mc-script').textContent = soundCheckGuest ? `${[soundCheckGuest.title, soundCheckGuest.name].filter(Boolean).join(' ')} pledged one hundred thousand naira.` : 'Add at least one guest, then return here for a sound-check line.';
   $('pledge-feed').innerHTML = pledges.length ? pledges.slice(0, 12).map(pledgeRow).join('') : '<div class="empty-list">No pledges yet. Press the microphone and read the script.</div>';
   const corrections = pledges.filter((p) => p.state === 'corrected').length;
   const unresolved = pledges.filter((p) => p.state === 'flagged').length;
@@ -37,12 +39,14 @@ function render() {
   $('summary-text').innerHTML = `<div><strong>${pledges.length}</strong><span>Pledges captured</span></div><div><strong>${corrections}</strong><span>Recheck corrections</span></div><div><strong>${unresolved}</strong><span>Needs checking</span></div><div><strong>${learned}</strong><span>Recognised after a correction</span></div>`;
   $('register-list').innerHTML = pledges.length ? pledges.map(pledgeRow).join('') : '<div class="empty-list">The register will fill as pledges are heard.</div>';
   const flags = pledges.filter((p) => p.state === 'flagged');
+  $('review-count').hidden = !flags.length;
+  $('review-count').textContent = flags.length;
   $('review-list').innerHTML = flags.length ? flags.map(reviewRow).join('') : '<div class="empty-list">Nothing needs checking right now.</div>';
   const usherUrl = `${location.origin}${location.pathname}?event=${encodeURIComponent(event.id)}&view=usher`;
   $('usher-link').href = usherUrl;
   $('usher-qr').src = `https://api.qrserver.com/v1/create-qr-code/?size=180x180&data=${encodeURIComponent(usherUrl)}`;
   $('usher-share').hidden = state.usherOnly;
-  $('guest-list-items').innerHTML = guests.map((g) => `<div class="guest-row"><span><strong>${esc([g.title,g.name].filter(Boolean).join(' '))}</strong>${g.group_name ? `<small class="muted"> · ${esc(g.group_name)}</small>` : ''}</span><span class="muted">${g.consent_to_contact ? 'Follow-up agreed' : 'No follow-up yet'}</span></div>`).join('');
+  $('guest-list-items').innerHTML = guests.length ? guests.map((g) => `<div class="guest-row"><span><strong>${esc([g.title,g.name].filter(Boolean).join(' '))}</strong>${g.group_name ? `<small class="muted"> · ${esc(g.group_name)}</small>` : ''}</span><span class="muted">${g.consent_to_contact ? 'Follow-up allowed' : 'No follow-up consent'}</span></div>`).join('') : '<div class="empty-list">No guests yet. Add one here or import a CSV.</div>';
   const followUps = pledges.filter((p) => ['confirmed','corrected','redeemed'].includes(p.state));
   $('follow-up-list').innerHTML = followUps.length ? followUps.map((p) => {
     const guest = guests.find((g) => g.id === p.guest_id);
@@ -62,33 +66,61 @@ function render() {
   const newest = pledges[0];
   if (newest) { $('newest').classList.remove('empty','pledge-arrival'); void $('newest').offsetWidth; $('newest').classList.add('pledge-arrival'); $('newest').innerHTML = `${esc(newest.matched_name || newest.heard_name || 'Name unclear')} <span class="pledge-amount">${newest.item ? esc(newest.item) : money(newest.amount, newest.currency)}</span>${newest.recognised_from_pledge_id ? '<small class="recognised">Recognised from a correction</small>' : ''}`; $('new-state').textContent = labelFor(newest.state); $('new-state').className = `state ${newest.state}`; }
   $('export').href = `/api/events/${event.id}/export.csv`;
+  const isLive = event.status === 'live';
+  $('start-event').disabled = isLive;
+  $('start-event').textContent = isLive ? 'Event is live' : 'Go live';
+  $('mic').disabled = !isLive || state.micPhase === 'connecting' || state.micPhase === 'stopping';
+  $('upload-audio').disabled = !isLive;
+  $('sample-audio').disabled = !isLive;
+  if (!isLive) { $('mic-label').textContent = 'Go live first'; $('mic-state').textContent = 'Offline'; }
 }
 function labelFor(state) { return ({provisional:'Provisional',confirmed:'Confirmed',corrected:'Rechecked — changed',flagged:'Needs checking',rejected:'Rejected',redeemed:'Redeemed'}[state] || state); }
 function pledgeRow(p) { const payment = (state.event.payments?.records || []).find((item) => item.pledge_id === p.id); const paid = payment?.status === 'success' && payment.paid_at ? ` · paid ${shortTime(payment.paid_at)}` : ''; const spoken = p.created_at ? `Spoken ${shortTime(p.created_at)}` : ''; return `<div class="pledge-row"><div class="pledge-main"><div class="pledge-name">${esc(p.matched_name || p.heard_name || 'Name unclear')}</div><div class="pledge-sub">${spoken}${paid} · Heard: ${esc(p.live_text || '—')}${p.recheck_text ? ` · Rechecked: ${esc(p.recheck_text)}` : ''}${p.reason ? ` · ${esc(p.reason)}` : ''}${p.recognised_from_pledge_id ? ' · Recognised from a correction' : ''}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div><div class="pledge-amount">${p.item ? esc(p.item) : money(p.amount,p.currency)}</div><span class="state ${p.state}">${labelFor(p.state)}</span></div></div>`; }
 function reviewRow(p) { const guests = state.event.guests.slice(0, 8); return `<div class="review-row"><div><strong>${esc(p.heard_name || 'Name unclear')} · ${p.item ? esc(p.item) : money(p.amount,p.currency)}</strong><div class="pledge-sub">${esc(p.reason || 'Please listen to the audio moment and choose what you heard.')}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div class="review-actions">${guests.map(g => `<button data-review="${p.id}" data-guest="${g.id}">This is ${esc([g.title,g.name].filter(Boolean).join(' '))}</button>`).join('')}<button data-walkin="${p.id}">New walk-in</button><button data-anonymous="${p.id}">Anonymous</button><button data-amount="${p.id}">Fix amount</button><button data-reject="${p.id}">Not a pledge</button></div></div>`; }
 async function refresh() { state.event = await api(`/api/events/${state.event.event.id}`); render(); }
 
-async function createEvent(event) { event.preventDefault(); clearError(); try { const form = new FormData(event.target); state.event = await api('/api/events', {method:'POST', body: JSON.stringify({name:form.get('name'), organisation:form.get('organisation'), event_date:form.get('event_date'), target:Number(form.get('target') || 0), minimum:Number(form.get('minimum') || 0), maximum:Number(form.get('maximum') || 0), demo:true})}); localStorage.removeItem('pledgebook_self_guest_id'); $('setup').hidden = true; $('dashboard').hidden = false; render(); connectSSE(); } catch (error) { showError(error.message); } }
-async function startEvent() { try { state.event = await api(`/api/events/${state.event.event.id}/start`, {method:'POST'}); render(); } catch (error) { showError(error.message); } }
-function connectSSE() { const source = new EventSource(`/api/events/${state.event.event.id}/stream`); source.onmessage = async (message) => { try { const payload = JSON.parse(message.data); if (payload.type === 'realtime' && payload.event?.transcript) { $('live-text').textContent = payload.event.transcript; $('live-status').textContent = payload.event.end_of_turn ? 'Turn heard' : 'Listening'; } if (payload.type === 'error') showError(payload.message); } catch (error) { showError('A live update could not be read; the register will refresh.'); } await refresh(); }; source.onerror = () => { $('connection').textContent = 'Updates reconnecting…'; }; }
+async function createEvent(event) { event.preventDefault(); clearError(); const submit = event.submitter; if (submit) submit.disabled = true; try { const form = new FormData(event.target); state.event = await api('/api/events', {method:'POST', body: JSON.stringify({name:form.get('name'), organisation:form.get('organisation'), event_date:form.get('event_date'), target:Number(form.get('target') || 0), minimum:Number(form.get('minimum') || 0), maximum:Number(form.get('maximum') || 0), demo:form.get('demo') === 'on'})}); $('setup').hidden = true; $('dashboard').hidden = false; render(); connectSSE(); setView(state.event.guests.length ? 'big-screen' : 'guest-list'); } catch (error) { showError(error.message); } finally { if (submit) submit.disabled = false; } }
+async function startEvent() { try { state.event = await api(`/api/events/${state.event.event.id}/start`, {method:'POST'}); render(); setConnection('Event live'); } catch (error) { showError(error.message); } }
+function connectSSE() { const source = new EventSource(`/api/events/${state.event.event.id}/stream`); source.onopen = () => { if (state.micPhase === 'idle') setConnection('Updates connected'); }; source.onmessage = async (message) => { try { const payload = JSON.parse(message.data); if (payload.type === 'realtime' && payload.event?.transcript) { $('live-text').textContent = payload.event.transcript; $('live-status').textContent = payload.event.end_of_turn ? 'Turn heard' : 'Listening'; } if (payload.type === 'error') showError(payload.message); } catch (error) { showError('A live update could not be read; the register will refresh.'); } await refresh(); }; source.onerror = () => { if (state.micPhase === 'idle') setConnection('Updates reconnecting', 'connecting'); }; }
 function setView(view) { document.querySelectorAll('.view').forEach((node) => node.hidden = node.id !== view); document.querySelectorAll('.tab').forEach((node) => node.classList.toggle('active', node.dataset.view === view)); }
 
 async function startMic() {
-  if (state.socket) return stopMic();
+  if (state.micPhase === 'listening') return stopMic();
+  if (state.micPhase !== 'idle') return;
   clearError();
+  $('mic-error').hidden = true;
+  if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+    const message = 'Microphone access requires HTTPS, or localhost during local development.';
+    $('mic-error').textContent = message; $('mic-error').hidden = false; showError(message); return;
+  }
+  state.micPhase = 'connecting';
+  $('mic').disabled = true; $('mic').className = 'mic-button connecting'; $('mic-label').textContent = 'Connecting…';
+  $('mic-state').textContent = 'Connecting'; $('capture-title').textContent = 'Opening the microphone'; setConnection('Connecting microphone', 'connecting');
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, channelCount:1}});
     state.audio = new AudioContext(); await state.audio.audioWorklet.addModule('/static/pcm-worklet.js');
     state.source = state.audio.createMediaStreamSource(state.stream); state.worklet = new AudioWorkletNode(state.audio, 'pledgebook-pcm');
-    state.socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/events/${state.event.event.id}/capture`);
-    state.socket.binaryType = 'arraybuffer';
-    state.socket.onopen = () => { $('mic').classList.add('active'); $('mic-label').textContent = 'Listening — press to stop'; $('connection').textContent = 'Listening'; state.source.connect(state.worklet); state.worklet.port.onmessage = (message) => { if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(message.data); }; };
-    state.socket.onmessage = async (message) => { const payload = JSON.parse(message.data); if (payload.type === 'realtime') { const event = payload.event; if (event.transcript) { $('live-text').textContent = event.transcript; $('live-status').textContent = event.end_of_turn ? 'Turn heard' : 'Listening'; } } else if (payload.type === 'pledge') { state.event = payload.state; render(); } else if (payload.type === 'error') showError(payload.message); };
-    state.socket.onclose = () => { cleanupMic(); $('connection').textContent = 'Ready'; };
-  } catch (error) { cleanupMic(); showError(error.message); }
+    const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/events/${state.event.event.id}/capture`);
+    state.socket = socket; socket.binaryType = 'arraybuffer';
+    socket.onmessage = async (message) => {
+      const payload = JSON.parse(message.data);
+      if (payload.type === 'connection') {
+        state.micPhase = 'listening'; $('mic').disabled = false; $('mic').className = 'mic-button active'; $('mic-label').textContent = 'Stop listening'; $('mic-state').textContent = 'Listening'; $('capture-title').textContent = 'Capturing the MC'; setConnection('Microphone live', 'listening');
+        state.source.connect(state.worklet); state.worklet.port.onmessage = (audioMessage) => { if (socket.readyState === WebSocket.OPEN) socket.send(audioMessage.data); };
+      } else if (payload.type === 'realtime') {
+        const realtime = payload.event; if (realtime.transcript) { $('live-text').textContent = realtime.transcript; $('live-status').textContent = realtime.end_of_turn ? 'Turn heard' : 'Listening'; }
+      } else if (payload.type === 'pledge') { state.event = payload.state; render(); }
+      else if (payload.type === 'error') { $('mic-error').textContent = payload.message; $('mic-error').hidden = false; showError(payload.message); }
+    };
+    socket.onerror = () => { const message = 'The live audio connection could not be opened. Check the server connection and try again.'; $('mic-error').textContent = message; $('mic-error').hidden = false; showError(message); };
+    socket.onclose = () => { if (state.socket === socket) { cleanupMic(false); setConnection('Ready'); } };
+  } catch (error) {
+    const message = error.name === 'NotAllowedError' ? 'Microphone permission was denied. Allow access in your browser settings, then try again.' : error.name === 'NotFoundError' ? 'No microphone was found on this device.' : `Microphone could not start: ${error.message}`;
+    cleanupMic(); $('mic-error').textContent = message; $('mic-error').hidden = false; showError(message);
+  }
 }
-function stopMic() { if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({type:'stop'})); cleanupMic(); }
-function cleanupMic() { if (state.worklet) state.worklet.disconnect(); if (state.source) state.source.disconnect(); state.stream?.getTracks().forEach(track => track.stop()); state.audio?.close(); state.socket?.close(); state.socket = null; state.worklet = null; state.source = null; state.stream = null; $('mic').classList.remove('active'); $('mic-label').textContent = 'Press to listen'; }
+function stopMic() { if (state.micPhase !== 'listening') return; state.micPhase = 'stopping'; $('mic').disabled = true; $('mic').className = 'mic-button connecting'; $('mic-label').textContent = 'Finishing…'; $('mic-state').textContent = 'Finishing'; if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({type:'stop'})); else cleanupMic(); }
+function cleanupMic(closeSocket = true) { const socket = state.socket; state.socket = null; if (state.worklet) { state.worklet.port.onmessage = null; state.worklet.disconnect(); } if (state.source) state.source.disconnect(); state.stream?.getTracks().forEach(track => track.stop()); state.audio?.close(); if (closeSocket && socket && socket.readyState < WebSocket.CLOSING) socket.close(); state.worklet = null; state.source = null; state.stream = null; state.audio = null; state.micPhase = 'idle'; $('mic').className = 'mic-button'; $('mic').disabled = state.event?.event?.status !== 'live'; $('mic-label').textContent = state.event?.event?.status === 'live' ? 'Start listening' : 'Go live first'; $('mic-state').textContent = 'Ready'; $('capture-title').textContent = 'Ready when you are'; }
 
 function randomCallId() { if (crypto.randomUUID) return crypto.randomUUID(); return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 function base64FromBuffer(buffer) { const bytes = new Uint8Array(buffer); let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(binary); }
@@ -197,7 +229,7 @@ async function playSampleRecording() {
   finally { $('sample-audio').disabled = false; }
 }
 
-async function addGuest(event) { event.preventDefault(); try { const form = new FormData(event.target); const guest = await api(`/api/events/${state.event.event.id}/guests`, {method:'POST', body: JSON.stringify({title:form.get('title'), name:form.get('name'), phone:form.get('phone'), email:form.get('email'), consent_to_contact:form.get('consent') === 'on'})}); if (state.event.event.demo) { state.selfGuestId = guest.id; localStorage.setItem('pledgebook_self_guest_id', String(guest.id)); } event.target.reset(); await refresh(); setView('big-screen'); } catch (error) { showError(error.message); } }
+async function addGuest(event) { event.preventDefault(); try { const form = new FormData(event.target); await api(`/api/events/${state.event.event.id}/guests`, {method:'POST', body: JSON.stringify({title:form.get('title'), name:form.get('name'), phone:form.get('phone'), email:form.get('email'), consent_to_contact:form.get('consent') === 'on'})}); event.target.reset(); await refresh(); setView('big-screen'); } catch (error) { showError(error.message); } }
 async function importGuests() { const file = $('guest-csv').files[0]; if (!file) return; $('import-status').textContent = 'Importing…'; try { const form = new FormData(); form.append('file', file, file.name); await api(`/api/events/${state.event.event.id}/guests/import`, {method:'POST', body:form}); $('import-status').textContent = 'Guest list imported.'; await refresh(); } catch (error) { $('import-status').textContent = 'Import stopped.'; showError(error.message); } finally { $('guest-csv').value = ''; } }
 document.addEventListener('click', async (event) => {
   const verifyButton = event.target.closest('[data-verify-payment]');
@@ -257,7 +289,7 @@ document.addEventListener('click', async (event) => {
       catch (error) { showError(error.message); }
   }
 });
-document.querySelector('#event-form').addEventListener('submit', createEvent); document.querySelector('#start-event').addEventListener('click', startEvent); document.querySelector('#mic').addEventListener('click', startMic); document.querySelector('#upload-audio').addEventListener('click', () => document.querySelector('#audio-upload').click()); document.querySelector('#sample-audio').addEventListener('click', playSampleRecording); document.querySelector('#audio-upload').addEventListener('change', uploadAudio); document.querySelector('#guest-form').addEventListener('submit', addGuest); document.querySelector('#import-guests').addEventListener('click', importGuests); document.querySelector('#start-call').addEventListener('click', () => { if (state.selectedPledge) startVoiceCall(state.selectedPledge.id); }); document.querySelector('#end-call').addEventListener('click', () => endVoiceSession(true)); document.querySelector('#reset').addEventListener('click', () => { cleanupMic(); endVoiceSession(false); localStorage.removeItem('pledgebook_self_guest_id'); location.href = location.pathname; }); document.querySelectorAll('.tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
+document.querySelector('#event-form').addEventListener('submit', createEvent); document.querySelector('#start-event').addEventListener('click', startEvent); document.querySelector('#mic').addEventListener('click', startMic); document.querySelector('#upload-audio').addEventListener('click', () => document.querySelector('#audio-upload').click()); document.querySelector('#sample-audio').addEventListener('click', playSampleRecording); document.querySelector('#audio-upload').addEventListener('change', uploadAudio); document.querySelector('#guest-form').addEventListener('submit', addGuest); document.querySelector('#import-guests').addEventListener('click', importGuests); document.querySelector('#start-call').addEventListener('click', () => { if (state.selectedPledge) startVoiceCall(state.selectedPledge.id); }); document.querySelector('#end-call').addEventListener('click', () => endVoiceSession(true)); document.querySelector('#reset').addEventListener('click', () => { cleanupMic(); endVoiceSession(false); location.href = location.pathname; }); document.querySelectorAll('.tab').forEach((button) => button.addEventListener('click', () => setView(button.dataset.view)));
 
 async function bootSharedEvent() {
   const eventId = new URLSearchParams(location.search).get('event');

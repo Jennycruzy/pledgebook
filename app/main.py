@@ -130,11 +130,10 @@ hub = Hub()
 
 def invented_guests() -> list[dict]:
     names = [
-        ("Chief", "Emeka Okonkwo"), ("Mrs", "Oluwaseun Adebayo"), ("", "Eseu Mommy"),
-        ("Alhaji", "Ibrahim Musa"), ("Deaconess", "Ngozi Eze"), ("Engineer", "Tunde Bakare"),
-        ("Dr", "Ifeomobi Nwachukwu"), ("Pastor", "Kelechi Amadi"), ("Brother", "Segun Ogunleye"),
-        ("Mrs", "Aisha Bello"), ("", "Youth Fellowship"),
-    ] + [("", f"Demo Guest {i:02d}") for i in range(1, 51)]
+        ("Ms", "Amina Yusuf"),
+        ("Mr", "Chinedu Obi"),
+        ("Dr", "Tola Adeyemi"),
+    ]
     return [{"title": title, "name": name, "phone": "", "email": "", "consent_to_contact": False, "group": ""}
             for title, name in names]
 
@@ -724,6 +723,8 @@ def normalise_wav(path: Path) -> None:
 @app.post("/api/events/{event_id}/upload")
 async def upload_audio(event_id: str, file: UploadFile = File(...)):
     event = event_or_404(event_id)
+    if event.get("status") != "live":
+        raise HTTPException(409, "Start the event before processing a recording.")
     if not (file.filename or "").lower().endswith(".wav"):
         raise HTTPException(415, "Upload a WAV recording")
     raw = await file.read()
@@ -755,6 +756,10 @@ async def upload_audio(event_id: str, file: UploadFile = File(...)):
 async def capture(event_id: str, browser: WebSocket):
     await browser.accept()
     event = event_or_404(event_id)
+    if event.get("status") != "live":
+        await browser.send_json({"type": "error", "message": "Start the event before opening the microphone."})
+        await browser.close(code=1008)
+        return
     try:
         aai, begin = await open_realtime(settings, event_keyterms(event_id))
     except Exception as exc:

@@ -7,56 +7,53 @@
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand"><span class="brand-mark">P</span><span>Pledgebook</span></div>
-    <div id="connection" class="connection">Ready</div>
-  </header>
+  <header class="topbar"><div class="brand"><span class="brand-mark">P</span><span>Pledgebook</span></div><div id="connection" class="connection"><span class="status-dot"></span><span>Ready</span></div></header>
 
   <main class="shell">
-    <section id="setup" class="panel hero-panel">
-      <p class="eyebrow">The MC calls it. Pledgebook writes it down — and makes sure it gets paid.</p>
-      <h1>Turn spoken pledges into a record everyone can check.</h1>
-      <p class="lede">Start a private demo launching with invented names. Speak into your microphone and watch the live reading, the careful recheck, and every question for an usher.</p>
-      <div class="notice"><strong>Demo event.</strong> Names and amounts are invented. AssemblyAI processes the real voice recording. Any checkout uses Paystack Test Mode only; no real money moves.</div>
+    <section id="setup" class="setup-layout">
+      <div class="setup-intro"><p class="eyebrow">Live pledge operations</p><h1>Every spoken pledge, captured and accountable.</h1><p class="lede">Create an event, add your guest list, then let the MC speak naturally. Pledgebook keeps the live total, uncertain entries and follow-up work in one place.</p><div class="trust-row"><span>Live transcription</span><span>Human review</span><span>Payment follow-up</span></div></div>
+      <div class="panel setup-card"><div><p class="step-label">New event</p><h2>Set up your pledgebook</h2><p class="muted">Start empty with your own event details. Nothing is pre-filled with demo donors.</p></div>
       <form id="event-form" class="form-grid">
-        <label>Event name<input name="name" value="Grace Assembly Launching" required></label>
-        <label>Organisation<input name="organisation" value="Grace Assembly" required></label>
+        <label>Event name<input name="name" placeholder="Annual Fundraising Dinner" required></label>
+        <label>Organisation<input name="organisation" placeholder="Your organisation" required></label>
         <label>Date<input name="event_date" type="date" required></label>
         <label>Target in naira<input name="target" type="number" min="0" value="10000000"></label>
         <label>Smallest allowed pledge<input name="minimum" type="number" min="0" value="0"></label>
         <label>Largest allowed pledge<input name="maximum" type="number" min="0" value="0"></label>
-        <button class="primary full" type="submit">Start my demo launching</button>
+        <label class="check full"><input id="demo-mode" name="demo" type="checkbox"> Use a 24-hour sample workspace with three fictional guests</label>
+        <button class="primary full" type="submit"><span>Create event</span><span aria-hidden="true">→</span></button>
       </form>
+      <p class="form-note">Microphone audio is processed by AssemblyAI. You control which guests may receive follow-up.</p></div>
     </section>
 
     <section id="dashboard" hidden>
-      <div id="demo-banner" class="demo-banner">Private demo. All names and amounts are invented. Your recording is sent to AssemblyAI. Payments use Paystack Test Mode only; no real money moves.</div>
       <div class="dashboard-head">
-        <div><p class="eyebrow" id="event-label"></p><h1 id="event-title"></h1></div>
-        <div class="head-actions"><button id="start-event" class="primary">Start listening</button><button id="reset" class="quiet">Start again</button></div>
+        <div><div class="event-kicker"><span id="event-mode" class="mode-badge">Event</span><span id="event-label"></span></div><h1 id="event-title"></h1></div>
+        <div class="head-actions"><button id="start-event" class="primary">Go live</button><button id="reset" class="quiet">Leave event</button></div>
       </div>
-      <div class="tabs"><button class="tab active" data-view="big-screen">Big screen</button><button class="tab" data-view="review">Needs checking</button><button class="tab" data-view="register">Register</button><button class="tab" data-view="guest-list">Guest list</button><button class="tab" data-view="follow-up">Follow-up</button></div>
+      <div id="demo-banner" class="demo-banner" hidden></div>
+      <div class="workspace"><nav class="tabs" aria-label="Event sections"><button class="tab active" data-view="big-screen"><span class="nav-icon">●</span>Live event</button><button class="tab" data-view="review"><span class="nav-icon">?</span>Needs review <span id="review-count" class="count" hidden></span></button><button class="tab" data-view="register"><span class="nav-icon">≡</span>Register</button><button class="tab" data-view="guest-list"><span class="nav-icon">+</span>Guests</button><button class="tab" data-view="follow-up"><span class="nav-icon">↗</span>Follow-up</button></nav><div class="content">
 
       <section id="big-screen" class="view">
         <div class="big-grid">
-          <div class="panel total-card"><p class="eyebrow">Launching totals</p><div class="totals-row"><div><span class="total-label">Pledged</span><div id="total" class="total">₦0</div></div><div><span class="total-label">Received</span><div id="received-total" class="total received">₦0</div></div></div><div class="progress"><span id="progress-bar"></span></div><p id="target-label" class="muted"></p><p id="limits-label" class="muted"></p></div>
-          <div class="panel listen-card"><p class="eyebrow">MC microphone</p><button id="mic" class="mic-button"><span class="mic-dot"></span><span id="mic-label">Press to listen</span></button><p id="mic-help" class="muted">Use your microphone, or play a real human WAV recording through the same path.</p><div class="upload-controls"><input id="audio-upload" type="file" accept=".wav,audio/wav" hidden><button id="upload-audio" class="quiet" type="button">Play a real WAV recording</button><button id="sample-audio" class="quiet" type="button">Play sample recording</button><span id="upload-status" class="muted">WAV files are converted to the format AssemblyAI needs.</span></div></div>
+          <div class="panel total-card"><p class="eyebrow">Event total</p><div class="totals-row"><div><span class="total-label">Pledged</span><div id="total" class="total">₦0</div></div><div><span class="total-label">Received</span><div id="received-total" class="total received">₦0</div></div></div><div class="progress"><span id="progress-bar"></span></div><p id="target-label" class="muted"></p><p id="limits-label" class="muted"></p></div>
+          <div class="panel listen-card"><div class="section-head"><div><p class="eyebrow">MC microphone</p><h2 id="capture-title">Ready when you are</h2></div><span id="mic-state" class="state">Offline</span></div><button id="mic" class="mic-button" disabled><span class="mic-symbol" aria-hidden="true">●</span><span id="mic-label">Go live first</span></button><p id="mic-help" class="muted">Start the event, then allow microphone access when prompted.</p><div id="mic-error" class="inline-error" hidden></div><div class="upload-controls"><input id="audio-upload" type="file" accept=".wav,audio/wav" hidden><button id="upload-audio" class="text-button" type="button">Upload WAV</button><button id="sample-audio" class="text-button" type="button" hidden>Use demo audio</button><span id="upload-status" class="muted"></span></div></div>
         </div>
         <div class="screen-columns">
           <div class="panel"><div class="section-head"><h2>Newest pledge</h2><span id="new-state" class="state">Waiting</span></div><div id="newest" class="newest empty">Speak a pledge to see it here.</div></div>
           <div class="panel"><div class="section-head"><h2>Live reading</h2><span id="live-status" class="state">Waiting</span></div><div id="live-text" class="live-text">Nothing heard yet.</div></div>
         </div>
-        <div class="panel mc-script-panel"><div class="section-head"><h2>MC script</h2><span class="muted">Read this into the microphone.</span></div><p id="mc-script" class="script">Oya church, make we give! Chief Emeka Okonkwo — two hundred and fifty thousand naira! <span id="self-script-line">Add yourself in Guest list to put your name here.</span> Clap for am!</p></div>
+        <div class="panel mc-script-panel"><div class="section-head"><h2>Sound check</h2><span class="muted">A simple line to test capture</span></div><p id="mc-script" class="script">Add a guest to generate a sound-check line.</p></div>
         <div class="panel"><div class="section-head"><h2>Recent pledges</h2><span class="muted">Each line keeps its spoken evidence.</span></div><div id="pledge-feed" class="pledge-feed"></div></div>
-        <div id="session-summary" class="panel session-summary"><div class="section-head"><h2>Your demo so far</h2><span class="muted">Every number comes from this event.</span></div><div id="summary-text" class="summary-grid"></div></div>
+        <div id="session-summary" class="panel session-summary"><div class="section-head"><h2>Event activity</h2><span class="muted">Updated live</span></div><div id="summary-text" class="summary-grid"></div></div>
       </section>
 
       <section id="review" class="view" hidden><div class="panel"><div class="section-head"><h2>Needs checking</h2><span class="muted">An usher decides what is unclear.</span></div><div id="usher-share" class="usher-share" hidden><div><strong>Open usher view on a phone</strong><p class="muted">Scan this QR code or open the link. It updates this event live.</p><a id="usher-link" class="button-link" target="_blank" rel="noreferrer">Open usher view</a></div><img id="usher-qr" alt="QR code for the usher view"></div><div id="review-list" class="review-list"></div></div></section>
       <section id="register" class="view" hidden><div class="panel"><div class="section-head"><h2>Register</h2><a id="export" class="button-link" href="#">Export CSV</a></div><div id="register-list" class="register-list"></div></div></section>
-      <section id="guest-list" class="view" hidden><div class="two-columns"><div class="panel"><div class="section-head"><h2>Guest list</h2><span id="guest-count" class="muted"></span></div><div id="keyterms-preview" class="notice"></div><div id="guest-list-items" class="guest-list-items"></div></div><div class="panel"><h2>Add yourself as a guest</h2><p class="muted">Use any invented name. It is stored only in this private demo and deleted after 24 hours. Add consent if you want to try the follow-up call.</p><form id="guest-form" class="form-grid"><label>Title<input name="title" placeholder="Chief"></label><label>Name<input name="name" required placeholder="Your name"></label><label>Phone<input name="phone"></label><label>Email<input name="email" type="email" placeholder="For the test receipt"></label><label class="check"><input name="consent" type="checkbox"> I agree to a follow-up call</label><button class="primary full">Add me to the guest list</button></form><hr><label class="muted">Import a CSV guest list<input id="guest-csv" type="file" accept=".csv,text/csv"></label><button id="import-guests" class="quiet" type="button">Import guest list</button><span id="import-status" class="muted"></span></div></div></section>
+      <section id="guest-list" class="view" hidden><div class="two-columns"><div class="panel"><div class="section-head"><div><p class="eyebrow">Directory</p><h2>Guests</h2></div><span id="guest-count" class="muted"></span></div><div id="keyterms-preview" class="subtle-notice"></div><div id="guest-list-items" class="guest-list-items"></div></div><div class="panel"><p class="eyebrow">Add guest</p><h2>Who should we listen for?</h2><p class="muted">Contact details are optional. Follow-up consent must be recorded before a guest can be contacted.</p><form id="guest-form" class="form-grid"><label>Title<input name="title" placeholder="Mr, Mrs, Dr…"></label><label>Full name<input name="name" required placeholder="Guest name"></label><label>Phone<input name="phone" inputmode="tel"></label><label>Email<input name="email" type="email" placeholder="name@example.com"></label><label class="check"><input name="consent" type="checkbox"> Guest agreed to pledge follow-up</label><button class="primary full">Add guest</button></form><div class="import-box"><label>Import guest CSV<input id="guest-csv" type="file" accept=".csv,text/csv"></label><button id="import-guests" class="quiet" type="button">Import file</button><span id="import-status" class="muted"></span></div></div></div></section>
       <section id="follow-up" class="view" hidden><div class="two-columns"><div class="panel"><div class="section-head"><h2>Confirmed pledges</h2><span class="muted">Only guests who agreed to follow-up can be called.</span></div><div id="follow-up-list" class="register-list"></div></div><div class="panel voice-panel"><p class="eyebrow">Disclosed automated assistant</p><h2 id="voice-title">No call started</h2><p id="voice-status" class="muted">Choose a confirmed pledge. The assistant checks identity before mentioning any amount.</p><div id="voice-transcript" class="live-text">The assistant's words will appear here.</div><div id="payment-result" class="notice" hidden></div><div class="head-actions"><button id="start-call" class="primary" disabled>Start assistant</button><button id="end-call" class="quiet" disabled>End call</button></div><p id="payment-note" class="muted">The assistant may speak with a clearly disclosed generated voice. Test checkout links are created only after identity is confirmed.</p></div></div></section>
 
-      <div id="error" class="error" hidden></div>
+      <div id="error" class="error" role="alert" hidden></div></div></div>
     </section>
   </main>
   <script src="/static/app.js" type="module"></script>
