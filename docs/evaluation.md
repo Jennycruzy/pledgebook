@@ -13,6 +13,24 @@ amounts in one breath. No line was credited to the wrong guest. This is one
 recording read by one person, so it is engineering evidence, not an accuracy
 result.
 
+## Running the benchmark
+
+The kit is in `eval/benchmark/`: a 20-name guest list with deliberate near
+names, three scripts (`scripts.md`), and an answer key written before any
+recording. Record each script as described, then:
+
+```sh
+python eval/benchmark/run.py --base https://pledgebook.54-154-121-30.sslip.io \
+    --email <owner email> recordings/*.wav
+```
+
+Each recording gets a fresh event. For script C the runner plays the usher and
+adds the unlisted name as soon as it is flagged, while the same listening
+session is still open. Add `--no-correction` for a control run without that
+step. The report lists wrong-person credits first, then every outcome, what
+Realtime and Sync each contributed, timing, the name-learning result, and
+every line with its live and rechecked words.
+
 ## The benchmark still to record
 
 - At least two different real speakers, with and without background music,

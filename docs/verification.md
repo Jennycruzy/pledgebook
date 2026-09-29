@@ -34,6 +34,20 @@ owner's voice stay in the Git-ignored `eval/private/` folder.
   lines, both listed guests confirmed with the right amounts, five flagged, none
   credited to the wrong guest.
 
+- **A pairing error found on the owner's recording (29 September 2026).**
+  Realtime ended one turn with the previous donor's amount and the next
+  donor's name: "₦500,000. Brother Segun Ogunleye." With Segun on the guest
+  list, Pledgebook credited him ₦500,000; the Sync clip contained the same
+  words, so the recheck agreed. He had pledged ₦10,000 (the ₦500,000 was
+  Pastor Kelechi Amadi's). An amount spoken before a name in one turn now
+  closes the earlier announcement instead, and any name or amount left
+  without a partner becomes a line for a person. On the same recording
+  afterwards Segun's line went to review with the recheck reading
+  "Brother Segun Ogunleye, 10,000". Regression tests keep both cases.
+- Timing on that run, measured from when the words were spoken: live screen
+  1.6 s and 2.3 s, rechecked record 2.2 s and 2.8 s for the two cleanly
+  paired pledges (local server, the recording streamed at real speed).
+
 ## AssemblyAI Voice Agent
 
 - Token: `GET https://agents.assemblyai.com/v1/token` with a Bearer key returned
@@ -56,6 +70,17 @@ owner's voice stay in the Git-ignored `eval/private/` folder.
 - A webhook without a valid HMAC-SHA512 signature returns HTTP 401.
 - Still to record on the public deployment: a completed test-card payment and a
   signed webhook delivery.
+
+## Attempts to break the safety rules
+
+`eval/try_to_break.py` runs 21 attempts against a live deployment: signed-out
+and cross-organisation reads, a cross-site form post, a reused invitation, an
+usher reading contacts, exporting, ending the event or changing a confirmed
+pledge, guessed pledge-page links, voice-assistant tokens without a page, the
+assistant recording or opening checkout before identity is confirmed, the
+assistant trying to change the amount, paying more than was pledged, a page
+after rejection, and a forged Paystack notification. On the public deployment
+on 29 September 2026 all 21 were refused; the report is in `eval/results/`.
 
 ## Not used
 

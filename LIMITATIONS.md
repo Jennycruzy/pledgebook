@@ -8,6 +8,8 @@ This is the build status as it stands, not a list of claims.
   rechecks and evidence clips were run end to end on the current build with a
   real human recording: both listed guests were confirmed with the right
   amounts, and every unknown name or ambiguous amount was flagged for review.
+- 21 attempts to break the access, privacy, assistant and payment rules were
+  all refused on the public deployment (`eval/try_to_break.py`).
 - A real Paystack test-mode checkout was created from a guest pledge page for a
   part payment and opened on `checkout.paystack.com`.
 - The automated test suite covers access control, roles, lifecycle, guest
