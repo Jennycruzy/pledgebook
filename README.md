@@ -6,9 +6,8 @@
 
 **[Open Pledgebook](https://pledgebook.54-154-121-30.sslip.io/)**
 
-Create an empty event with your own guest list, or explicitly choose the
-24-hour sample workspace when you want fictional data. Read the generated
-sound-check line in your own voice and watch the spoken pledge move from the
+Create an empty event with your own guest list. Announce a guest's name and
+the amount they actually pledged, then watch the spoken pledge move from the
 live screen to a checked record. The follow-up assistant can create a Paystack
 Test Mode checkout after it confirms who is speaking. No real money moves.
 
@@ -29,7 +28,7 @@ money in the bank without ever crediting the wrong person?**
 
 ## What a judge should see in two minutes
 
-1. Create an event. Leave sample workspace unchecked for an empty real event.
+1. Create an event. The fundraising target is optional.
 2. Open **Guests**, add a guest and record follow-up consent when applicable.
 3. Press **Go live**, then **Start listening** and read the sound-check line, or use the owner-approved
    sample recording button. Pledges arrive as **Provisional**, then become

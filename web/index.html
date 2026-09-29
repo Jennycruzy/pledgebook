@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Pledgebook</title>
-  <link rel="stylesheet" href="/static/styles.css?v=4">
+  <link rel="stylesheet" href="/static/styles.css?v=5">
 </head>
 <body>
   <header class="topbar"><div class="brand"><span class="brand-mark">P</span><span>Pledgebook</span></div><div id="connection" class="connection"><span class="status-dot"></span><span>Ready</span></div></header>
@@ -17,10 +17,7 @@
         <label>Event name<input name="name" placeholder="Annual Fundraising Dinner" required></label>
         <label>Organisation<input name="organisation" placeholder="Your organisation" required></label>
         <label>Date<input name="event_date" type="date" required></label>
-        <label>Target in naira<input name="target" type="number" min="0" value="10000000"></label>
-        <label>Smallest allowed pledge<input name="minimum" type="number" min="0" value="0"></label>
-        <label>Largest allowed pledge<input name="maximum" type="number" min="0" value="0"></label>
-        <label class="check full"><input id="demo-mode" name="demo" type="checkbox"> Use a 24-hour sample workspace with three fictional guests</label>
+        <label>Fundraising target <span class="optional">Optional</span><input name="target" type="number" min="0" placeholder="Enter an amount only if your event has a target"></label>
         <button class="primary full" type="submit"><span>Create event</span><span aria-hidden="true">→</span></button>
       </form>
       <p class="form-note">Microphone audio is processed by AssemblyAI. You control which guests may receive follow-up.</p></div>
@@ -43,7 +40,7 @@
           <div class="panel"><div class="section-head"><h2>Newest pledge</h2><span id="new-state" class="state">Waiting</span></div><div id="newest" class="newest empty">Speak a pledge to see it here.</div></div>
           <div class="panel"><div class="section-head"><h2>Live reading</h2><span id="live-status" class="state">Waiting</span></div><div id="live-text" class="live-text">Nothing heard yet.</div></div>
         </div>
-        <div class="panel mc-script-panel"><div class="section-head"><h2>Sound check</h2><span class="muted">A simple line to test capture</span></div><p id="mc-script" class="script">Add a guest to generate a sound-check line.</p></div>
+        <div class="panel mc-script-panel"><div class="section-head"><h2>Capture guidance</h2><span class="muted">Pledgebook records what the MC announces</span></div><p id="mc-script" class="script">Announce the guest’s name and the amount they actually pledged.</p></div>
         <div class="panel"><div class="section-head"><h2>Recent pledges</h2><span class="muted">Each line keeps its spoken evidence.</span></div><div id="pledge-feed" class="pledge-feed"></div></div>
         <div id="session-summary" class="panel session-summary"><div class="section-head"><h2>Event activity</h2><span class="muted">Updated live</span></div><div id="summary-text" class="summary-grid"></div></div>
       </section>
@@ -56,6 +53,6 @@
       <div id="error" class="error" role="alert" hidden></div></div></div>
     </section>
   </main>
-  <script src="/static/app.js?v=4" type="module"></script>
+  <script src="/static/app.js?v=5" type="module"></script>
 </body>
 </html>
