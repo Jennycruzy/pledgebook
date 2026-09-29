@@ -1,75 +1,96 @@
 # Pledgebook
 
-> **The MC calls it. Pledgebook writes it down — and makes sure it gets paid.**
+> **The MC calls it. Pledgebook writes it down — and follows it up until it is paid.**
 
-## Try the live demo
+At a Nigerian church launching or school fundraiser, pledges are shouted across a
+noisy hall: *"Chief Emeka Okonkwo — two hundred and fifty thousand naira!"*
+Someone scribbles it on paper, half the names are misspelled, and months later
+nobody can say who promised what. Pledgebook listens to the MC, writes each
+pledge into a register with the exact audio as evidence, asks a person whenever
+anything is unclear, and then gives every guest a private page to pay, promise a
+date, or say that something is wrong.
 
-**[Open Pledgebook](https://pledgebook.54-154-121-30.sslip.io/)**
+**Open it:** [pledgebook.54-154-121-30.sslip.io](https://pledgebook.54-154-121-30.sslip.io/)
+— create an account for your organisation, or try the guided path in
+[`docs/judge-guide.md`](docs/judge-guide.md).
 
-Create an empty event with your own guest list. Announce a guest's name and
-the amount they actually pledged, then watch the spoken pledge move from the
-live screen to a checked record. The follow-up assistant can create a Paystack
-Test Mode checkout after it confirms who is speaking. No real money moves.
-
-The sharper question is: **can a promise shouted across a noisy hall become
+The hard question it answers: **can a promise shouted across a noisy hall become
 money in the bank without ever crediting the wrong person?**
 
-## Three things Pledgebook does
+## How it works
 
-- **It learns names during the event.** When an usher resolves an unclear name,
-  the active AssemblyAI listening session receives the new guest term and later
-  pledges show that they were recognised after the correction.
-- **It can show the moment you pledged.** The private payment page uses Sync's
-  word timings to trim a pledge clip. If the words cannot be separated safely
-  from another guest, it shows the transcript instead of playing audio.
-- **It flags instead of guessing.** An unclear name, unclear amount, walk-in,
-  or disagreement stays visible for a human, with the live words, recheck, and
-  audio evidence retained.
-
-## What a judge should see in two minutes
-
-1. Create an event. The fundraising target is optional.
-2. Open **Guests**, add a guest and record follow-up consent when applicable.
-3. Press **Go live**, then **Start listening** and read the sound-check line, or use the owner-approved
-   sample recording button. Pledges arrive as **Provisional**, then become
-   **Confirmed** or **Needs checking** after the recheck.
-4. Open **Needs checking** and choose a guest or **New walk-in**. The correction
-   is written to the audit trail and updates the listening list.
-5. In **Follow-up**, choose **Call about this**. The disclosed assistant checks
-   identity before discussing money, then offers the private pledge page and
-   Paystack Test Mode checkout.
-
-## The evidence we will publish
-
-The benchmark is deliberately empty until it is run on the deployed build. We
-will report the **wrong-person count first**, then names and amounts right,
-needed flags, time to the live screen, time to a rechecked record, and the
-number of corrected names recognised on their next mention. No number appears
-here until it is measured and committed in [`docs/evaluation.md`](docs/evaluation.md).
+1. **Set up.** An owner creates the organisation, invites admins and ushers, and
+   adds or imports the guest list. The import shows every row before anything
+   is added and catches duplicates by name, phone or email.
+2. **Listen.** When the event goes live, the MC's microphone streams to
+   AssemblyAI Realtime. Guest names are sent as key terms. Each pledge appears on
+   the live screen as *Provisional* within seconds, with a short clip of the
+   exact words.
+3. **Recheck.** That clip goes to AssemblyAI Sync with the guest list and word
+   timings. Agreement becomes *Confirmed*. Anything unclear — an unknown name,
+   two amounts in one breath, a currency mismatch, the same guest pledging again
+   moments later — becomes *Needs checking*. Nothing is guessed.
+4. **Review.** Ushers work the review queue on their own phones: play the clip,
+   choose the guest, add a walk-in, enter the amount, or reject the line. A name
+   an usher resolves is pushed straight into the live listening session, so the
+   next mention is recognised.
+5. **Follow up.** Staff send each guest a private pledge page by WhatsApp, SMS or
+   email. The guest hears the moment they pledged (only when the clip contains
+   nobody else's name), pays all or part through Paystack, chooses a date, or
+   reports a problem. They can also talk it through with a clearly disclosed
+   AssemblyAI voice assistant on their own phone. Staff log calls they make from
+   their own phones and record cash or bank-transfer payments.
+6. **Settle.** Ending the event produces a settlement report: pledged, received,
+   outstanding, promised dates and last contact per guest, exportable as CSV.
+   Every change, and who made it, is in the activity log.
 
 ## How AssemblyAI is used
 
-- **Realtime Speech-to-Text** hears the room while the MC is speaking.
-- **Sync** rechecks the exact short audio clip with the situation description,
-  guest names, and word timings. We chose Sync over Dictation because this
-  build uses the verbatim transcript and timings; Dictation's rewrite would be
-  discarded. The decision is recorded in [`docs/architecture.md`](docs/architecture.md).
-- **Voice Agent** runs the disclosed follow-up conversation, confirms identity,
-  and calls structured server actions for the payment link, promise, dispute,
-  opt-out, and final outcome.
+- **Realtime Speech-to-Text** hears the room and receives mid-session
+  `UpdateConfiguration` messages when an usher adds or resolves a name.
+- **Sync** rechecks each short pledge clip with the event description, guest
+  names and word timings. We chose Sync over Dictation because the product needs
+  the verbatim transcript and timings, not a rewritten one.
+- **Voice Agent** runs the guest-side assistant with a generated voice that
+  always introduces itself as automated. It confirms who is speaking before
+  recording anything and calls server tools to open checkout, record a promised
+  date, record a dispute or stop reminders. It never changes the amount.
 
-Paystack is a separate payment provider. The server uses its Test Mode secret
-only, verifies the signed webhook and transaction reference, and marks a pledge
-**Redeemed** only after the amount and currency match.
+## What makes it a real product, not a demo
 
-## What Pledgebook does not do
+- Accounts, organisations and **owner / admin / usher roles**. Ushers never see
+  guest phone numbers or emails. Every event API, export, audio clip and live
+  connection checks membership. Writes need a same-origin header; sign-in and
+  guest pages are rate limited.
+- A full **event lifecycle**: set up, live, paused, ended, reopened, archived,
+  deleted. Pausing or ending closes open microphones.
+- **Guest administration**: edit, remove, consent changes, search, duplicate
+  detection, import preview, per-guest history.
+- **Payments are credited exactly once**, may be partial, and are verified with
+  Paystack by reference, amount and currency, from the signed webhook or when the
+  guest returns from checkout. Offline payments are recorded by staff.
+- **Retention**: audio is deleted a set number of days after an event ends;
+  sample events are deleted after 24 hours. Daily usage limits per organisation
+  protect the service allowance.
 
-- It does not claim Nigerian Pidgin, Igbo, or Yoruba understanding. It listens
-  for names and amounts in mixed English speech and ignores the rest.
-- It does not decide about money when the words are unclear. A person resolves
-  every flag.
-- It does not pressure donors. The follow-up is a disclosed reminder with a
-  payment link and an opt-out.
+## Honest limits
+
+- Paystack is running in **test mode** on the public deployment. The code
+  switches to real payments when a live key is configured; see
+  [`docs/operations.md`](docs/operations.md).
+- Email delivery needs SMTP settings on the server. Without them, pages are
+  sent by WhatsApp, SMS or a copied link from staff phones. There is no
+  automated outbound phone calling.
+- No accuracy number is published until the benchmark in
+  [`docs/evaluation.md`](docs/evaluation.md) is recorded with real voices.
+- Pledgebook does not claim to understand Nigerian Pidgin, Igbo or Yoruba. It
+  finds names and amounts in mixed English speech and asks a person otherwise.
+
+More in [`LIMITATIONS.md`](LIMITATIONS.md). Architecture:
+[`docs/architecture.md`](docs/architecture.md). Privacy:
+[`docs/privacy.md`](docs/privacy.md). Measured service behaviour:
+[`docs/verification.md`](docs/verification.md). Product decisions:
+[`docs/decisions.md`](docs/decisions.md).
 
 ## Run it locally
 
@@ -78,33 +99,19 @@ cd pledgebook
 python3 -m venv .venv
 . .venv/bin/activate
 python3 -m pip install -r requirements.txt
-cp .env.example .env
-# Put the AssemblyAI key in .env. Keep the file local.
+cp .env.example .env        # add your AssemblyAI key; Paystack and SMTP are optional
 python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
-Open `http://127.0.0.1:8000`. The microphone needs HTTPS when deployed;
-localhost is allowed for local testing. All demo names and amounts are
-invented. Every transcript in the product comes from AssemblyAI processing a
-real human recording. The clearly disclosed follow-up assistant may use
-AssemblyAI generated speech under the owner's decision; MC and test recordings
-are never synthetic.
+Open `http://127.0.0.1:8000`, create an account, and create an event or a
+sample event. The microphone needs HTTPS when deployed; localhost is allowed.
 
-## Engineering notes and limits
+Tests run without any service keys:
 
-The server keeps API keys out of the browser, relays 16 kHz mono microphone
-audio to AssemblyAI Realtime, stores event state in SQLite, and keeps the exact
-audio evidence for each pledge. It supports a real WAV upload through the same
-path, reconnect-safe live updates, guest CSV import, an usher queue, register
-history, CSV export, private expiring payment pages, and a signed Paystack
-webhook. Public demo sandboxes allow three minutes of audio and two follow-up
-calls, then expire after 24 hours; a daily cap is visible in the app.
+```sh
+python3 -m pip install pytest
+python3 -m pytest -q
+```
 
-The optional AssemblyAI LLM Gateway was not available for the tested account,
-so hard sentences go to rules and a human. See [`LIMITATIONS.md`](LIMITATIONS.md),
-[`docs/api-verification.md`](docs/api-verification.md),
-[`docs/privacy.md`](docs/privacy.md), and
-[`docs/judge-guide.md`](docs/judge-guide.md) for the full record.
-
-CircleCI runs the repository checks in clean Python and Node jobs. The public
-repository is [github.com/Jennycruzy/pledgebook](https://github.com/Jennycruzy/pledgebook).
+CircleCI runs the tests, a compile check and a JavaScript syntax check.
+Repository: [github.com/Jennycruzy/pledgebook](https://github.com/Jennycruzy/pledgebook).

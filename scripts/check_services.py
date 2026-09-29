@@ -1,7 +1,7 @@
-"""Real Phase 0 service checks. Never generates audio or pledge transcripts.
+"""Live AssemblyAI service checks. Never generates audio or pledge transcripts.
 
 Run from any directory; credentials stay in the project's ignored .env.
-Outputs are recorded under docs/evidence/phase-0 with secrets redacted.
+Outputs are recorded under eval/private/service-checks with secrets redacted.
 """
 
 import argparse
@@ -126,32 +126,19 @@ async def main(args):
         raise SystemExit("ASSEMBLYAI_API_KEY is missing from the local .env")
     SECRETS.append(key)
     report = {"recorded_at": datetime.now(timezone.utc).isoformat(),
-              "command": ["python3", "scripts/phase0_probe.py", *sys.argv[1:]],
+              "command": ["python3", "scripts/check_services.py", *sys.argv[1:]],
               "purpose": "Live verification only; invented test name; no synthetic audio.",
               "packages": {name: importlib.metadata.version(name) for name in ("httpx", "websockets", "python-dotenv")},
               "checks": []}
     async with httpx.AsyncClient(timeout=90) as client:
-        if args.mode in {"accounts", "gateway"}:
-            if args.mode == "accounts":
-                voice = await http_check(client, "voice_agent_token", "GET",
-                    "https://agents.assemblyai.com/v1/token",
-                    headers={"Authorization": "Bearer " + key},
-                    params={"expires_in_seconds": 60, "max_session_duration_seconds": 60})
-                voice["limits"] = "Token creation only; no synthesized voice, call, or session started. Token redacted."
-                report["checks"].append(voice)
-                report["checks"].append(await realtime(key))
-            payload = {"model": args.model or "gemini-2.5-flash-lite", "max_tokens": 32,
-                "messages": [{"role": "user", "content": "Return a JSON object with ok set to true."}],
-                "response_format": {"type": "json_schema", "json_schema": {
-                    "name": "access_check", "strict": True, "schema": {"type": "object",
-                    "properties": {"ok": {"type": "boolean"}}, "required": ["ok"], "additionalProperties": False}}}}
-            if args.no_schema:
-                payload.pop("response_format")
-            gateway = await http_check(client, "gateway_documented_example_model", "POST",
-                "https://llm-gateway.assemblyai.com/v1/chat/completions",
-                headers={"Authorization": key}, json=payload)
-            gateway["request_body"] = payload
-            report["checks"].append(gateway)
+        if args.mode == "accounts":
+            voice = await http_check(client, "voice_agent_token", "GET",
+                "https://agents.assemblyai.com/v1/token",
+                headers={"Authorization": "Bearer " + key},
+                params={"expires_in_seconds": 60, "max_session_duration_seconds": 60})
+            voice["limits"] = "Token creation only; no synthesized voice, call, or session started. Token redacted."
+            report["checks"].append(voice)
+            report["checks"].append(await realtime(key))
         else:
             if not args.audio:
                 raise SystemExit("Audio checks require --audio (a human recording).")
@@ -161,7 +148,7 @@ async def main(args):
                 if args.mode == "audio" and (wav.getnchannels(), wav.getsampwidth(), wav.getframerate(), wav.getcomptype()) != (1, 2, 16000, "NONE"):
                     raise SystemExit("Convert a copy of the real recording to mono 16-bit 16 kHz WAV first; retain the original.")
                 if args.mode == "audio" and not 5 <= duration <= 15:
-                    raise SystemExit("Phase 0's paired checks require a real 5–15 second clip.")
+                    raise SystemExit("The paired checks require a real 5–15 second clip.")
                 if args.mode == "sync" and not 0.08 <= duration <= 120:
                     raise SystemExit("Sync accepts only short recordings up to 120 seconds.")
             report["recording"] = {"file": audio.name, "sha256": hashlib.sha256(audio.read_bytes()).hexdigest(),
@@ -178,13 +165,13 @@ async def main(args):
             report["checks"].append(result)
             if args.mode == "audio":
                 report["checks"].append(await realtime(key, audio))
-    evidence_dir = ROOT / ("docs/evidence/phase-0" if args.mode == "accounts" else "eval/private/phase-0")
+    evidence_dir = ROOT / "eval/private/service-checks"
     target = evidence_dir / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-" + args.mode + ".json")
     target.parent.mkdir(parents=True, exist_ok=True)
     report = clean(report)
     target.write_text(json.dumps(report, indent=2) + "\n")
     for check in report["checks"]:
-        if args.mode in {"accounts", "gateway"}:
+        if args.mode == "accounts":
             print(json.dumps(check, ensure_ascii=False))
         else:
             output = {k: check.get(k) for k in ("check", "http_status", "ok", "elapsed_ms", "error_type", "error") if k in check}
@@ -203,9 +190,7 @@ async def main(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("mode", choices=["accounts", "gateway", "sync", "audio"])
+    parser.add_argument("mode", choices=["accounts", "sync", "audio"])
     parser.add_argument("--audio")
     parser.add_argument("--expected")
-    parser.add_argument("--model")
-    parser.add_argument("--no-schema", action="store_true", help="Check basic model access separately from structured-output support")
     raise SystemExit(asyncio.run(main(parser.parse_args())))

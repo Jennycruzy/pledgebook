@@ -1,26 +1,47 @@
 # Current limits
 
-This is an honest build status, not a list of claims.
+This is the build status as it stands, not a list of claims.
 
-- Paystack Test Mode is configured on the deployed server and checkout
-  initialization plus pre-payment verification have been measured. A successful
-  test-card payment, signed webhook delivery, and redeemed-state evidence are
-  still outstanding.
-- The optional AssemblyAI LLM Gateway is disabled because the tested account
-  models did not provide the required structured response.
-- The active Realtime session now receives an `UpdateConfiguration` message when
-  a guest is added or an usher resolves a flag. A dedicated recording with an
-  unlisted name said twice is still needed before claiming that recognition
-  improved on the second mention.
-- The supplied 70.4-second recording was a diagnostic run. It exposed merged
-  turns and flags; it is not the Phase 9 benchmark and supplies no public
-  accuracy number.
-- The walk-in test and matching cut-off decision are still pending a real
-  recording containing an unlisted name.
-- The browser follow-up assistant has a real Voice Agent route and verified
-  server tool behavior. A full browser conversation still needs a manual run.
-- Nigerian Pidgin, Igbo, and Yoruba are not claimed as supported languages.
-  Pledgebook extracts names and amounts when they survive mixed English speech.
-- The public HTTPS deployment is live. The owner still must set the Paystack
-  webhook, complete a browser test-card payment, run the signed-out payment
-  check, record the benchmark, and make the submission media.
+## Measured and working
+
+- Microphone capture through the browser, Realtime transcription, Sync
+  rechecks and evidence clips were run end to end on the current build with a
+  real human recording: both listed guests were confirmed with the right
+  amounts, and every unknown name or ambiguous amount was flagged for review.
+- A real Paystack test-mode checkout was created from a guest pledge page for a
+  part payment and opened on `checkout.paystack.com`.
+- The automated test suite covers access control, roles, lifecycle, guest
+  administration, review rules, repeat detection, payment crediting (including
+  duplicates and partial payments), webhooks and retention.
+
+## Not yet demonstrated
+
+- **A completed test-card payment on the public deployment** with a signed
+  webhook turning a pledge to *Paid in full*. The code path is tested with a
+  stand-in Paystack; the live run needs the owner's browser.
+- **A full spoken conversation with the guest-side voice assistant** in a
+  browser. The Voice Agent session, generated speech and tool call were verified
+  with a script; the in-page conversation still needs a manual run.
+- **Recognition after a correction.** The listening list is updated during the
+  session, but no recording has yet shown an unlisted name recognised on its
+  second mention.
+- **Accuracy.** No benchmark has been recorded. See `docs/evaluation.md`.
+
+## By design or by configuration
+
+- **Payments are in Paystack test mode** on the public deployment. Real money
+  needs a verified Paystack business and a live key (`docs/operations.md`).
+- **Email** needs SMTP settings; without them staff send pages by WhatsApp,
+  SMS or a copied link from their own phones.
+- **No automated phone calls.** Staff call from their own phones and log the
+  outcome. The voice assistant runs only on the guest's own device, from their
+  private pledge page.
+- **Languages.** Nigerian Pidgin, Igbo and Yoruba are not claimed as supported.
+- **Hard sentences** go to a person. The optional AssemblyAI language-model
+  service did not return the required structured output for the tested
+  account models, so it is not used.
+- **Single server.** SQLite and in-process live updates suit one server per
+  deployment. Running several servers would need a shared database and message
+  bus.
+- **Naira only** for online payment. Pledges heard in other currencies are
+  recorded and totalled separately and settled offline.

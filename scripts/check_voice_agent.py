@@ -143,7 +143,7 @@ async def run(audio: Path):
         report["error_type"] = type(exc).__name__
         report["error"] = str(exc).replace(key, "[REDACTED]").replace(token or "", "[REDACTED]") if token else str(exc).replace(key, "[REDACTED]")
     report["elapsed_ms"] = round((time.perf_counter() - started) * 1000, 2)
-    destination = ROOT / "eval/private/phase-0" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-voice.json")
+    destination = ROOT / "eval/private/service-checks" / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ") + "-voice.json")
     destination.parent.mkdir(parents=True, exist_ok=True)
     destination.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps({"ok": report["ok"], "token_http_status": report.get("token_http_status"),

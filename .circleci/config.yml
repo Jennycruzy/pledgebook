@@ -23,7 +23,7 @@ jobs:
       - checkout
       - run:
           name: Check browser JavaScript
-          command: node --check web/app.js
+          command: node --check web/app.js && node --check web/pay.js
 
 workflows:
   checks:

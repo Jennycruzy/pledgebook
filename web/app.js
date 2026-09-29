@@ -5,7 +5,7 @@ const app = $('app');
 const state = {
   me: null, events: null, eventsView: 'active', eventsQuery: '',
   event: null, eventId: null, tab: 'live', stream: null,
-  mic: { phase: 'idle', audio: null, worklet: null, sink: null, socket: null, source: null, stream: null },
+  mic: { stage: 'idle', audio: null, worklet: null, sink: null, socket: null, source: null, stream: null },
   registerFilter: 'all', registerQuery: '', guestQuery: '', importPreview: null,
   activity: null, settlement: null, settingsData: null, staff: null,
 };
@@ -327,7 +327,7 @@ function openStream(id) {
   closeStream();
   const source = new EventSource(`/api/events/${id}/stream`);
   state.stream = source;
-  source.onopen = () => setConnection(state.mic.phase === 'listening' ? 'Microphone live' : 'Live updates on', state.mic.phase === 'listening' ? 'listening' : '');
+  source.onopen = () => setConnection(state.mic.stage === 'listening' ? 'Microphone live' : 'Live updates on', state.mic.stage === 'listening' ? 'listening' : '');
   source.onerror = () => setConnection('Reconnecting…', 'connecting');
   source.onmessage = (message) => {
     const payload = JSON.parse(message.data);
@@ -364,11 +364,11 @@ function updateLiveNumbers() {
 function renderLive() {
   const { event, pledges, totals, guests, usage } = state.event;
   const progress = event.target_minor ? Math.min(100, (totals.pledged / event.target_minor) * 100) : 0;
-  const listening = state.mic.phase === 'listening';
+  const listening = state.mic.stage === 'listening';
   const others = Object.entries(totals.by_currency || {}).filter(([c]) => c !== totals.currency);
   const audioLeft = usage ? Math.max(0, usage.limits.audio_seconds - usage.used.audio_seconds) : null;
-  const micCard = can('run') ? `<div class="panel listen-card"><div class="section-head"><div><p class="eyebrow">MC microphone</p><h2>${listening ? 'Capturing the MC' : event.status === 'live' ? 'Ready to listen' : 'Not recording'}</h2></div><span class="state">${esc(state.mic.phase === 'idle' ? (event.status === 'live' ? 'Ready' : STATUS_LABELS[event.status]) : state.mic.phase)}</span></div>
-      <button id="mic" class="mic-button ${listening ? 'active' : ''}" ${event.status !== 'live' || ['connecting', 'stopping'].includes(state.mic.phase) ? 'disabled' : ''}><span class="mic-symbol" aria-hidden="true">●</span><span>${listening ? 'Stop listening' : state.mic.phase === 'connecting' ? 'Connecting…' : state.mic.phase === 'stopping' ? 'Finishing…' : 'Start listening'}</span></button>
+  const micCard = can('run') ? `<div class="panel listen-card"><div class="section-head"><div><p class="eyebrow">MC microphone</p><h2>${listening ? 'Capturing the MC' : event.status === 'live' ? 'Ready to listen' : 'Not recording'}</h2></div><span class="state">${esc(state.mic.stage === 'idle' ? (event.status === 'live' ? 'Ready' : STATUS_LABELS[event.status]) : state.mic.stage)}</span></div>
+      <button id="mic" class="mic-button ${listening ? 'active' : ''}" ${event.status !== 'live' || ['connecting', 'stopping'].includes(state.mic.stage) ? 'disabled' : ''}><span class="mic-symbol" aria-hidden="true">●</span><span>${listening ? 'Stop listening' : state.mic.stage === 'connecting' ? 'Connecting…' : state.mic.stage === 'stopping' ? 'Finishing…' : 'Start listening'}</span></button>
       <p class="muted">${event.status === 'live' ? 'Audio goes to AssemblyAI for transcription. Each pledge keeps a short clip as evidence.' : event.status === 'setup' ? 'Press Go live when the launching starts.' : event.status === 'paused' ? 'Resume the event to listen again.' : 'This event is closed to new pledges.'}</p>
       <div class="upload-controls"><input id="audio-upload" type="file" accept=".wav,audio/wav" hidden><button id="upload-audio" class="text-button" type="button" ${event.status !== 'live' ? 'disabled' : ''}>Process a WAV recording</button>${event.sample ? `<button id="sample-audio" class="text-button" type="button" ${event.status !== 'live' ? 'disabled' : ''}>Process the sample recording</button>` : ''}<span id="upload-status" class="muted"></span></div>
       ${audioLeft !== null ? `<p class="muted small-print">Listening time left today for your organisation: ${Math.floor(audioLeft / 60)} min</p>` : ''}</div>` : '';
@@ -391,10 +391,10 @@ function pledgeRow(p, actions = '') {
 // ------------------------------------------------------------ microphone
 
 async function startMic() {
-  if (state.mic.phase === 'listening') return requestStopMic();
-  if (state.mic.phase !== 'idle') return;
+  if (state.mic.stage === 'listening') return requestStopMic();
+  if (state.mic.stage !== 'idle') return;
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) { showError('Microphone access needs HTTPS, or localhost during development.'); return; }
-  state.mic.phase = 'connecting'; renderTab(); setConnection('Connecting microphone', 'connecting');
+  state.mic.stage = 'connecting'; renderTab(); setConnection('Connecting microphone', 'connecting');
   const mic = state.mic;
   try {
     mic.stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: false, noiseSuppression: false, channelCount: 1 } });
@@ -406,7 +406,7 @@ async function startMic() {
     socket.onmessage = (message) => {
       const payload = JSON.parse(message.data);
       if (payload.type === 'connection') {
-        mic.phase = 'listening'; renderTab(); setConnection('Microphone live', 'listening');
+        mic.stage = 'listening'; renderTab(); setConnection('Microphone live', 'listening');
         mic.source.connect(mic.worklet);
         mic.worklet.port.onmessage = (audioMessage) => { if (socket.readyState === WebSocket.OPEN) socket.send(audioMessage.data); };
       } else if (payload.type === 'realtime') showLiveWords(payload.event);
@@ -423,8 +423,8 @@ async function startMic() {
 
 function requestStopMic() {
   const mic = state.mic;
-  if (mic.phase !== 'listening') return;
-  mic.phase = 'stopping'; renderTab();
+  if (mic.stage !== 'listening') return;
+  mic.stage = 'stopping'; renderTab();
   if (mic.socket?.readyState === WebSocket.OPEN) mic.socket.send(JSON.stringify({ type: 'stop' })); else stopMic();
 }
 
@@ -434,7 +434,7 @@ function stopMic() {
   if (mic.worklet) { mic.worklet.port.onmessage = null; mic.worklet.disconnect(); }
   mic.sink?.disconnect(); mic.source?.disconnect(); mic.stream?.getTracks().forEach((t) => t.stop()); mic.audio?.close();
   if (socket && socket.readyState < WebSocket.CLOSING) socket.close();
-  Object.assign(mic, { phase: 'idle', audio: null, worklet: null, sink: null, source: null, stream: null });
+  Object.assign(mic, { stage: 'idle', audio: null, worklet: null, sink: null, source: null, stream: null });
 }
 
 async function uploadRecording(file) {

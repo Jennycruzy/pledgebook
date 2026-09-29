@@ -228,7 +228,7 @@ async def verify_payment(payment: dict, actor: dict) -> dict:
     result = await verify_transaction(settings, payment["reference"])
     data = result["data"]
     status = str(data.get("status") or "").lower()
-    snapshot = {key: data.get(key) for key in ("reference", "status", "amount", "currency", "gateway_response", "paid_at")}
+    snapshot = {key: data.get(key) for key in ("reference", "status", "amount", "currency", "paid_at")}
     if data.get("reference") != payment["reference"]:
         raise PaystackError("Paystack returned a different payment reference.")
     if int(data.get("amount") or 0) != int(payment["amount_kobo"]):

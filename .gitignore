@@ -7,3 +7,5 @@ data/
 .venv/
 __pycache__/
 *.pyc
+# Owner-approved recording for sample events; kept off the public repository.
+demo-sample.wav

@@ -1,42 +1,78 @@
 # Pledgebook architecture
 
-The first working slice keeps the API key on the server. The browser sends
-PCM16 microphone frames to the server. The server relays them to AssemblyAI
-Realtime, stores a rolling byte buffer, and sends final turn events back to
-the browser. When a final name and amount can be paired, it writes a
-provisional row and cuts the exact source audio into a short WAV file.
-
-That clip is sent to AssemblyAI Sync with the event description, guest names,
-and word timings. The result is reconciled against the live row. Agreement
-becomes **Confirmed**; an amount correction becomes **Rechecked — changed**;
-an unclear or conflicting person becomes **Needs checking**. Every transition
-is an audit row. The original clip remains the evidence.
-
 ```text
-browser microphone or real WAV upload
-        │ PCM16 frames / normalized WAV
+ MC microphone (staff browser)        WAV upload / sample recording
+        │ 16 kHz PCM over WebSocket            │ normalised to 16 kHz mono
+        ▼                                      ▼
+ ┌──────────────────────────── FastAPI server ────────────────────────────┐
+ │ accounts · roles · rate limits · same-origin write check               │
+ │                                                                        │
+ │ ListeningSession ──► AssemblyAI Realtime (key terms, live updates)     │
+ │   │ audio appended to disk          │ final turns                      │
+ │   ▼                                 ▼                                  │
+ │ evidence clip per pledge ◄── pairing + extraction ──► SQLite ledger    │
+ │   │                                                   │  audit log     │
+ │   └──► AssemblyAI Sync (clip, names, timings) ──► reconcile ──► review │
+ │                                                                        │
+ │ Server-sent events → every open screen rebuilds its own role's view    │
+ └────────────────────────────────────────────────────────────────────────┘
+        │ private pledge page link (WhatsApp / SMS / email / copy)
         ▼
-FastAPI server ───────► AssemblyAI Realtime (live turns)
-   │        │                         │
-   │        └──────────► SQLite + audit log + SSE updates
-   │                                  │
-   └──────────► exact WAV clip ─► AssemblyAI Sync (word timings)
-                                  │
-                                  ▼
-                         reconciliation and usher queue
-                                           │
-                         browser follow-up ◄┘
-                                  │ short-lived token
-                                  ▼
-                         AssemblyAI Voice Agent
+ Guest's own phone ──► Paystack checkout ──► signed webhook / return check
+        │
+        └──► AssemblyAI Voice Agent (short-lived token issued per page)
 ```
 
-The browser never receives the AssemblyAI API key. WAV uploads are real human
-recordings and are normalized to the Realtime format before streaming. The
-follow-up browser session receives a short-lived Voice Agent token; its
-structured tool calls return to the FastAPI server, which writes call outcomes
-and refuses to share payment information before identity confirmation.
+## Modules
 
-The payment adapter is intentionally absent from the live path until Jenny
-creates Paystack test mode. The optional Gateway integration is also disabled
-until an account model accepts the required structured output.
+| File | Responsibility |
+|---|---|
+| `app/auth.py` | Password hashing (scrypt), cookie sessions, invites, role permissions, rate limiter |
+| `app/core.py` | Shared services, usage limits, the per-role event view, retention |
+| `app/capture.py` | Listening sessions, disk-backed audio, pledge creation, repeat handling, Sync reconciliation |
+| `app/extractor.py`, `amounts.py`, `names.py` | Rules that find names and amounts and match guests conservatively |
+| `app/followup.py` | Pledge pages, deliveries, call logs, payments, webhook, guest-side assistant tools |
+| `app/delivery.py` | Message text, SMS/WhatsApp links, SMTP email |
+| `app/sample.py` | Sample events with invented guests, kept apart from real events |
+| `app/main.py` | Accounts, organisation, staff, events, lifecycle, guests, review, capture socket, reports |
+| `web/app.js` | Staff app (hash routes: `#/events`, `#/events/<id>/<tab>`, `#/settings`, `#/invite/<token>`) |
+| `web/pay.js` | The guest's private pledge page and voice assistant |
+
+## Roles
+
+| Permission | Owner | Admin | Usher |
+|---|:-:|:-:|:-:|
+| See the live screen and register | ✓ | ✓ | ✓ |
+| Resolve lines that need checking | ✓ | ✓ | ✓ |
+| Change an accepted pledge, run the event, listen | ✓ | ✓ | |
+| Manage guests and see contact details | ✓ | ✓ | |
+| Follow-up, payments, settlement, exports, activity | ✓ | ✓ | |
+| Organisation settings and staff | ✓ | | |
+
+Admins may invite ushers; only owners invite admins. An event outside a
+member's organisations answers 404.
+
+## Pledge states
+
+`provisional` (heard live) → `confirmed` or `corrected` (Sync agreed, or changed
+the amount) or `flagged` (a person must decide) → `redeemed` once payments
+received reach the pledged amount. `rejected` lines stay in the register with a
+reason. After a review action the line stays flagged if anything else is still
+unclear.
+
+## Rules that protect the ledger
+
+- Timestamps restart with each listening session, so repeats are only compared
+  within the same session. An identical announcement repeated within a minute is
+  logged and not counted twice; a different amount from the same guest becomes
+  its own flagged line (*keep both* or *replace the earlier one*).
+- When the live reading and the recheck disagree about the person or currency,
+  the guest is cleared and a person decides.
+- The guest page plays audio only when the clip contains exactly one guest name
+  and one clear amount.
+- A payment is marked successful with a conditional update, so the webhook and
+  the return check cannot both credit it. It is verified against its own amount
+  and currency; the pledge is paid in full only when received reaches the
+  current pledged amount.
+- Rejecting a pledge, moving it to another guest, withdrawing consent, a guest
+  dispute or opt-out all close its pledge page.
