@@ -136,13 +136,12 @@ async function startVoice() {
       voice.socket.send(JSON.stringify({ type: 'session.update', session: { system_prompt: prompt, greeting: `Hello, I am the automated Pledgebook assistant for ${session.event.organisation}. Am I speaking with ${session.guest_name}?`, input: { format: { encoding: 'audio/pcm' }, keyterms: [session.guest_name] }, output: { voice: 'anna', format: { encoding: 'audio/pcm' } }, tools: tools() } }));
       await startMicrophone();
       document.getElementById('voice-end').hidden = false;
-      transcript('Assistant: ');
     };
     voice.socket.onmessage = async (raw) => {
       const event = JSON.parse(raw.data);
       if (event.type === 'reply.audio') play(event.data);
-      else if (event.type === 'transcript.agent.delta') transcript(event.delta || '');
-      else if (event.type === 'transcript.user') transcript(`\nYou: ${event.text || ''}\nAssistant: `);
+      else if (event.type === 'transcript.agent') transcript(`Assistant: ${event.text || ''}\n`);
+      else if (event.type === 'transcript.user') transcript(`You: ${event.text || ''}\n`);
       else if (event.type === 'tool.call') voice.pending.push(event);
       else if (event.type === 'reply.done') await flushTools();
       else if (event.type === 'session.ended') endVoice(false);

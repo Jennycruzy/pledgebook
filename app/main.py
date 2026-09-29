@@ -90,7 +90,7 @@ def page(name: str) -> FileResponse:
     return FileResponse(WEB / name, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 async def index():
     return page("index.html")
 
