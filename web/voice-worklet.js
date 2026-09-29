@@ -4,6 +4,7 @@ class PledgebookVoicePCMProcessor extends AudioWorkletProcessor {
     this.inputRate = sampleRate;
     this.position = 0;
     this.buffer = [];
+    this.pending = [];
   }
   process(inputs) {
     const input = inputs[0] && inputs[0][0];
@@ -18,8 +19,9 @@ class PledgebookVoicePCMProcessor extends AudioWorkletProcessor {
     }
     const consumed = Math.floor(this.position);
     if (consumed > 0) { this.buffer = this.buffer.slice(consumed); this.position -= consumed; }
-    if (output.length) {
-      const pcm = new Int16Array(output);
+    this.pending.push(...output);
+    while (this.pending.length >= 2400) {
+      const pcm = new Int16Array(this.pending.splice(0, 2400));
       this.port.postMessage(pcm.buffer, [pcm.buffer]);
     }
     return true;

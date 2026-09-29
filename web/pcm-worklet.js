@@ -4,6 +4,7 @@ class PledgebookPCMProcessor extends AudioWorkletProcessor {
     this.inputRate = sampleRate;
     this.position = 0;
     this.buffer = [];
+    this.pending = [];
   }
   process(inputs) {
     const input = inputs[0] && inputs[0][0];
@@ -18,7 +19,14 @@ class PledgebookPCMProcessor extends AudioWorkletProcessor {
     }
     const consumed = Math.floor(this.position);
     if (consumed > 0) { this.buffer = this.buffer.slice(consumed); this.position -= consumed; }
-    if (output.length) { const pcm = new Int16Array(output); this.port.postMessage(pcm.buffer, [pcm.buffer]); }
+    this.pending.push(...output);
+    // AssemblyAI Realtime expects useful audio frames rather than the tiny
+    // 128-sample render quanta produced by the browser. Send 100 ms of 16 kHz
+    // PCM per message, matching the proven server-side WAV streaming path.
+    while (this.pending.length >= 1600) {
+      const pcm = new Int16Array(this.pending.splice(0, 1600));
+      this.port.postMessage(pcm.buffer, [pcm.buffer]);
+    }
     return true;
   }
 }

@@ -1,4 +1,4 @@
-const state = { event: null, media: null, audio: null, worklet: null, socket: null, source: null, stream: null, micPhase: 'idle', selectedPledge: null, voiceSocket: null, voiceAudio: null, voiceWorklet: null, voiceSource: null, voiceStream: null, voicePlayback: null, voiceNextTime: 0, voicePendingTools: [], voiceCallId: null, usherOnly: new URLSearchParams(location.search).get('view') === 'usher' };
+const state = { event: null, media: null, audio: null, worklet: null, sink: null, socket: null, source: null, stream: null, micPhase: 'idle', selectedPledge: null, voiceSocket: null, voiceAudio: null, voiceWorklet: null, voiceSink: null, voiceSource: null, voiceStream: null, voicePlayback: null, voiceNextTime: 0, voicePendingTools: [], voiceCallId: null, usherOnly: new URLSearchParams(location.search).get('view') === 'usher' };
 const $ = (id) => document.getElementById(id);
 document.querySelector('input[name="event_date"]').value = new Date().toISOString().slice(0, 10);
 const money = (value, currency = 'NGN') => currency === 'NGN' || !currency ? `₦${Number(value || 0).toLocaleString('en-NG')}` : `${currency} ${Number(value || 0).toLocaleString()}`;
@@ -70,10 +70,10 @@ function render() {
   const isLive = event.status === 'live';
   $('start-event').disabled = isLive;
   $('start-event').textContent = isLive ? 'Event is live' : 'Go live';
-  $('mic').disabled = !isLive || state.micPhase === 'connecting' || state.micPhase === 'stopping';
+  $('mic').disabled = state.micPhase === 'connecting' || state.micPhase === 'stopping';
   $('upload-audio').disabled = !isLive;
   $('sample-audio').disabled = !isLive;
-  if (!isLive) { $('mic-label').textContent = 'Go live first'; setOptionalText('mic-state', 'Offline'); }
+  if (!isLive) { $('mic-label').textContent = 'Start listening'; setOptionalText('mic-state', 'Ready'); }
 }
 function labelFor(state) { return ({provisional:'Provisional',confirmed:'Confirmed',corrected:'Rechecked — changed',flagged:'Needs checking',rejected:'Rejected',redeemed:'Redeemed'}[state] || state); }
 function pledgeRow(p) { const payment = (state.event.payments?.records || []).find((item) => item.pledge_id === p.id); const paid = payment?.status === 'success' && payment.paid_at ? ` · paid ${shortTime(payment.paid_at)}` : ''; const spoken = p.created_at ? `Spoken ${shortTime(p.created_at)}` : ''; return `<div class="pledge-row"><div class="pledge-main"><div class="pledge-name">${esc(p.matched_name || p.heard_name || 'Name unclear')}</div><div class="pledge-sub">${spoken}${paid} · Heard: ${esc(p.live_text || '—')}${p.recheck_text ? ` · Rechecked: ${esc(p.recheck_text)}` : ''}${p.reason ? ` · ${esc(p.reason)}` : ''}${p.recognised_from_pledge_id ? ' · Recognised from a correction' : ''}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div><div class="pledge-amount">${p.item ? esc(p.item) : money(p.amount,p.currency)}</div><span class="state ${p.state}">${labelFor(p.state)}</span></div></div>`; }
@@ -99,8 +99,14 @@ async function startMic() {
   setOptionalText('mic-state', 'Connecting'); setOptionalText('capture-title', 'Opening the microphone'); setConnection('Connecting microphone', 'connecting');
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, channelCount:1}});
-    state.audio = new AudioContext(); await state.audio.audioWorklet.addModule('/static/pcm-worklet.js');
+    $('mic-help').textContent = 'Microphone access allowed. Speak clearly; words will appear under Live reading.';
+    if (state.event.event.status !== 'live') {
+      state.event = await api(`/api/events/${state.event.event.id}/start`, {method:'POST'});
+      render();
+    }
+    state.audio = new AudioContext(); await state.audio.resume(); await state.audio.audioWorklet.addModule('/static/pcm-worklet.js');
     state.source = state.audio.createMediaStreamSource(state.stream); state.worklet = new AudioWorkletNode(state.audio, 'pledgebook-pcm');
+    state.sink = state.audio.createGain(); state.sink.gain.value = 0; state.worklet.connect(state.sink); state.sink.connect(state.audio.destination);
     const socket = new WebSocket(`${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws/events/${state.event.event.id}/capture`);
     state.socket = socket; socket.binaryType = 'arraybuffer';
     socket.onmessage = async (message) => {
@@ -121,7 +127,7 @@ async function startMic() {
   }
 }
 function stopMic() { if (state.micPhase !== 'listening') return; state.micPhase = 'stopping'; $('mic').disabled = true; $('mic').className = 'mic-button connecting'; $('mic-label').textContent = 'Finishing…'; setOptionalText('mic-state', 'Finishing'); if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({type:'stop'})); else cleanupMic(); }
-function cleanupMic(closeSocket = true) { const socket = state.socket; state.socket = null; if (state.worklet) { state.worklet.port.onmessage = null; state.worklet.disconnect(); } if (state.source) state.source.disconnect(); state.stream?.getTracks().forEach(track => track.stop()); state.audio?.close(); if (closeSocket && socket && socket.readyState < WebSocket.CLOSING) socket.close(); state.worklet = null; state.source = null; state.stream = null; state.audio = null; state.micPhase = 'idle'; $('mic').className = 'mic-button'; $('mic').disabled = state.event?.event?.status !== 'live'; $('mic-label').textContent = state.event?.event?.status === 'live' ? 'Start listening' : 'Go live first'; setOptionalText('mic-state', 'Ready'); setOptionalText('capture-title', 'Ready when you are'); }
+function cleanupMic(closeSocket = true) { const socket = state.socket; state.socket = null; if (state.worklet) { state.worklet.port.onmessage = null; state.worklet.disconnect(); } if (state.sink) state.sink.disconnect(); if (state.source) state.source.disconnect(); state.stream?.getTracks().forEach(track => track.stop()); state.audio?.close(); if (closeSocket && socket && socket.readyState < WebSocket.CLOSING) socket.close(); state.worklet = null; state.sink = null; state.source = null; state.stream = null; state.audio = null; state.micPhase = 'idle'; $('mic').className = 'mic-button'; $('mic').disabled = false; $('mic-label').textContent = 'Start listening'; setOptionalText('mic-state', 'Ready'); setOptionalText('capture-title', 'Ready when you are'); }
 
 function randomCallId() { if (crypto.randomUUID) return crypto.randomUUID(); return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 function base64FromBuffer(buffer) { const bytes = new Uint8Array(buffer); let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(binary); }
@@ -147,7 +153,7 @@ function playVoiceAudio(encoded) {
   const source = state.voicePlayback.createBufferSource(); source.buffer = buffer; source.connect(state.voicePlayback.destination);
   const when = Math.max(state.voicePlayback.currentTime, state.voiceNextTime); source.start(when); state.voiceNextTime = when + buffer.duration;
 }
-function stopVoiceInput() { if (state.voiceWorklet) state.voiceWorklet.disconnect(); if (state.voiceSource) state.voiceSource.disconnect(); state.voiceStream?.getTracks().forEach((track) => track.stop()); state.voiceAudio?.close(); state.voiceWorklet = null; state.voiceSource = null; state.voiceStream = null; state.voiceAudio = null; }
+function stopVoiceInput() { if (state.voiceWorklet) state.voiceWorklet.disconnect(); if (state.voiceSink) state.voiceSink.disconnect(); if (state.voiceSource) state.voiceSource.disconnect(); state.voiceStream?.getTracks().forEach((track) => track.stop()); state.voiceAudio?.close(); state.voiceWorklet = null; state.voiceSink = null; state.voiceSource = null; state.voiceStream = null; state.voiceAudio = null; }
 function endVoiceSession(sendEnd = true) { if (sendEnd && state.voiceSocket?.readyState === WebSocket.OPEN) state.voiceSocket.send(JSON.stringify({type:'session.end'})); stopVoiceInput(); if (state.voiceSocket) state.voiceSocket.close(); state.voiceSocket = null; state.voicePendingTools = []; $('start-call').disabled = !state.selectedPledge; $('end-call').disabled = true; }
 function voiceTools() { return [
   {type:'function', name:'confirm_identity', description:'Confirm whether the person answering is the named guest. Do this before mentioning the amount.', parameters:{type:'object', properties:{is_correct_person:{type:'boolean'}}, required:['is_correct_person'], additionalProperties:false}},
@@ -171,9 +177,9 @@ async function flushVoiceTools() {
 }
 async function startVoiceInput() {
   state.voiceStream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true, noiseSuppression:true, channelCount:1}});
-  state.voiceAudio = new AudioContext(); await state.voiceAudio.audioWorklet.addModule('/static/voice-worklet.js');
+  state.voiceAudio = new AudioContext(); await state.voiceAudio.resume(); await state.voiceAudio.audioWorklet.addModule('/static/voice-worklet.js');
   state.voiceSource = state.voiceAudio.createMediaStreamSource(state.voiceStream); state.voiceWorklet = new AudioWorkletNode(state.voiceAudio, 'pledgebook-voice-pcm');
-  state.voiceSource.connect(state.voiceWorklet); state.voiceWorklet.port.onmessage = (message) => { if (state.voiceSocket?.readyState === WebSocket.OPEN) state.voiceSocket.send(JSON.stringify({type:'input.audio', audio:base64FromBuffer(message.data)})); };
+  state.voiceSink = state.voiceAudio.createGain(); state.voiceSink.gain.value = 0; state.voiceSource.connect(state.voiceWorklet); state.voiceWorklet.connect(state.voiceSink); state.voiceSink.connect(state.voiceAudio.destination); state.voiceWorklet.port.onmessage = (message) => { if (state.voiceSocket?.readyState === WebSocket.OPEN) state.voiceSocket.send(JSON.stringify({type:'input.audio', audio:base64FromBuffer(message.data)})); };
 }
 async function startVoiceCall(pledgeId) {
   const pledge = state.event.pledges.find((item) => item.id === Number(pledgeId)); if (!pledge) return;
