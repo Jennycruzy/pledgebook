@@ -1,7 +1,7 @@
 import asyncio
 
 from app import capture as capture_module
-from app.capture import CaptureAudio, create_live_pledge
+from app.capture import CaptureAudio, confirm_pledge, create_live_pledge
 from app.core import database
 from app.extractor import extract_turn
 from helpers import add_guest
@@ -79,4 +79,24 @@ def test_every_pledge_keeps_an_evidence_clip(owner, event, monkeypatch):
     row = database.one("SELECT audio_path FROM pledges WHERE id = ?", (pledge_id,))
     assert row["audio_path"].endswith(f"pledge-{pledge_id}.wav")
     assert owner.get(f"/api/events/{event['id']}/pledges/{pledge_id}/audio").status_code == 200
+    audio.close()
+
+
+def test_both_passes_and_timings_are_kept(owner, event, monkeypatch):
+    monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
+    guest = add_guest(owner, event["id"], name="Chief Emeka Obi")
+    audio = fake_session(event["id"])
+    pledge_id = live(event["id"], audio, "Chief Emeka Obi 200,000 naira", 2000, [guest])
+
+    async def fake_sync(settings, path, terms):
+        words = [{"text": w, "start": 500 + i * 300, "end": 750 + i * 300} for i, w in enumerate("Chief Emeka Obi 250,000 naira".split())]
+        return {"text": "Chief Emeka Obi 250,000 naira", "words": words}, 812.5
+
+    monkeypatch.setattr(capture_module, "sync_transcribe", fake_sync)
+    run(confirm_pledge(event["id"], pledge_id))
+    row = database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))
+    assert row["live_amount_minor"] == 200_000 and row["live_guest_id"] == guest["id"]
+    assert row["recheck_amount_minor"] == 250_000 and row["recheck_guest_id"] == guest["id"]
+    assert row["state"] == "corrected" and row["amount_minor"] == 250_000
+    assert row["recheck_ms"] == 812.5 and row["spoken_end_at"] and row["rechecked_at"]
     audio.close()

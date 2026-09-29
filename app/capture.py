@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 from array import array
+from datetime import datetime, timedelta, timezone
 import json
 from pathlib import Path
 import re
@@ -41,6 +42,12 @@ class CaptureAudio:
         self.path = folder / f"capture-{self.capture_id}.pcm"
         self.handle = self.path.open("wb")
         self.size = 0
+        self.started_at = datetime.now(timezone.utc)
+
+    def wall_time(self, offset_ms: int) -> str:
+        """When a moment in this session's audio was spoken, as a UTC timestamp."""
+
+        return (self.started_at + timedelta(milliseconds=max(0, offset_ms))).isoformat()
 
     @property
     def seconds(self) -> float:
@@ -204,10 +211,10 @@ async def confirm_pledge(event_id: str, pledge_id: int) -> None:
             safe_path, safe_reason = make_safe_audio_clip(event_id, pledge_id, Path(pledge["audio_path"]), recheck, text, words, current_guest)
         database.execute(
             "UPDATE pledges SET guest_id = ?, recheck_text = ?, amount_minor = ?, currency = ?, matched_name = ?, state = ?, reason = ?, "
-            "safe_audio_path = ?, safe_audio_reason = ?, updated_at = ? WHERE id = ?",
+            "safe_audio_path = ?, safe_audio_reason = ?, recheck_amount_minor = ?, recheck_guest_id = ?, recheck_ms = ?, rechecked_at = ?, updated_at = ? WHERE id = ?",
             (current_guest, text, amount.minor if amount.minor is not None else pledge["amount_minor"], amount.currency or pledge["currency"],
              matched_name if current_guest else ("Anonymous donor" if anonymous and state == "confirmed" else ""),
-             state, reason, str(safe_path) if safe_path else None, safe_reason, now(), pledge_id),
+             state, reason, str(safe_path) if safe_path else None, safe_reason, amount.minor, recheck_guest, elapsed_ms, now(), now(), pledge_id),
         )
         database.audit(event_id, "rechecked", {"text": text, "elapsed_ms": elapsed_ms, "state": state, "reason": reason}, pledge_id,
                        actor={"label": "AssemblyAI Sync"})
@@ -277,10 +284,11 @@ async def create_live_pledge(event_id: str, capture: CaptureAudio, live_text: st
 
     pledge_id = database.execute(
         "INSERT INTO pledges(event_id, guest_id, heard_name, matched_name, amount_minor, currency, item, live_text, source_start_ms, source_end_ms, "
-        "state, reason, recognised_from_pledge_id, recognised_at, capture_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        "state, reason, recognised_from_pledge_id, recognised_at, capture_id, live_amount_minor, live_guest_id, spoken_end_at, created_at, updated_at) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         (event_id, guest_id, name_turn.name or "", name_match.guest_name if guest_id and name_match.guest_name else "",
          amount.minor, amount.currency, amount.item, live_text, start_ms, end_ms, state, reason, recognised_from, recognised_at,
-         capture.capture_id, now(), now()),
+         capture.capture_id, amount.minor, guest_id, capture.wall_time(end_ms), now(), now()),
     )
     clip = save_pledge_clip(event_id, pledge_id, capture, start_ms - 500, end_ms + 500)
     if clip:

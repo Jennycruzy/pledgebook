@@ -1,14 +1,17 @@
 # Pledgebook
 
-> **The MC calls it. Pledgebook writes it down — and follows it up until it is paid.**
+> **Speech does not become financial truth just because it was heard once.**
+>
+> Realtime hears the room. Sync independently rechecks the exact pledge clip.
+> Anything uncertain goes to a person. Only then does a pledge enter collection.
 
 At a Nigerian church launching or school fundraiser, pledges are shouted across a
 noisy hall: *"Chief Emeka Okonkwo — two hundred and fifty thousand naira!"*
 Someone scribbles it on paper, half the names are misspelled, and months later
-nobody can say who promised what. Pledgebook listens to the MC, writes each
-pledge into a register with the exact audio as evidence, asks a person whenever
-anything is unclear, and then gives every guest a private page to pay, promise a
-date, or say that something is wrong.
+nobody can say who promised what. Pledgebook listens to the MC, keeps the exact
+audio of every pledge as evidence, checks it twice, asks a person whenever the
+two passes disagree or anything is unclear, and then gives every guest a private
+page to pay, promise a date, or say that something is wrong.
 
 **Open it:** [pledgebook.54-154-121-30.sslip.io](https://pledgebook.54-154-121-30.sslip.io/)
 — create an account for your organisation, or try the guided path in

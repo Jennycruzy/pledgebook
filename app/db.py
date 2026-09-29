@@ -148,6 +148,14 @@ class Database:
                 "capture_id": "TEXT",
                 "received_minor": "INTEGER NOT NULL DEFAULT 0",
                 "follow_up_stopped": "INTEGER NOT NULL DEFAULT 0",
+                # What each pass heard, kept for measuring the two passes.
+                "live_amount_minor": "INTEGER",
+                "live_guest_id": "INTEGER",
+                "spoken_end_at": "TEXT",
+                "recheck_amount_minor": "INTEGER",
+                "recheck_guest_id": "INTEGER",
+                "recheck_ms": "REAL",
+                "rechecked_at": "TEXT",
             },
             "payments": {
                 "public_token": "TEXT",
