@@ -89,6 +89,46 @@ def test_amount_then_from_name_stays_one_pledge():
     assert name.name == "Segun Ogunleye" and amount.amount.minor == 500_000
 
 
+def test_corrected_amount_before_next_name_stays_with_pending_donor():
+    """Regression from speaker A: a correction must not shift every later donor."""
+
+    guests = [{"id": 1, "name": "Ibrahim Musa"}, {"id": 2, "name": "Tola Adeyemi"}]
+    window = TurnWindow()
+    window.add(extract_turn("Alhaji Ibrahim Musa.", _words("Alhaji Ibrahim Musa.", 0), guests))
+
+    text = "₦50,000— sorry, ₦70,000. Dr. Tola Adeyemi."
+    name, amount, reason = window.add(extract_turn(text, _words(text, 3000), guests))
+
+    assert name.name == "Ibrahim Musa"
+    assert amount.amount.minor is None
+    assert "More than one amount" in reason
+    assert window.pending_name.name == "Tola Adeyemi"
+
+    name, amount, reason = window.add(extract_turn("₦1 million.", _words("₦1 million.", 7000), guests))
+    assert name.name == "Tola Adeyemi"
+    assert amount.amount.minor == 1_000_000
+    assert reason is None
+
+
+def test_amount_before_next_name_closes_pending_announcement_without_a_cascade():
+    """Regression from script C: Bukola's amount and the following Chief shared a turn."""
+
+    guests = [{"id": 1, "name": "Bukola Ajayi"}, {"id": 2, "name": "Nwachukwu Ezenwa"}]
+    window = TurnWindow()
+    window.add(extract_turn("Mrs Bukola Ajayi.", _words("Mrs Bukola Ajayi.", 0), guests))
+
+    text = "₦60,000. Chief Nwachukwu Ezenwa is adding another"
+    name, amount, reason = window.add(extract_turn(text, _words(text, 3000), guests))
+    assert name.name == "Bukola Ajayi"
+    assert amount.amount.minor == 60_000
+    assert reason is None
+    assert window.pending_name.name == "Nwachukwu Ezenwa"
+
+    name, amount, _ = window.add(extract_turn("₦50,000.", _words("₦50,000.", 7000), guests))
+    assert name.name == "Nwachukwu Ezenwa"
+    assert amount.amount.minor == 50_000
+
+
 def test_a_name_that_never_gets_an_amount_is_handed_back():
     guests = [{"id": 1, "name": "Emeka Okonkwo"}]
     window = TurnWindow()

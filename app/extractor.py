@@ -149,20 +149,36 @@ NAME_START = re.compile(
 def _amount_before_name(text: str, phrase: str, heard_name: Optional[str], matched_guests: list[dict]) -> Optional[int]:
     """Return where the name starts when a clear amount comes first in the turn."""
 
-    if not heard_name or not phrase or phrase == text or phrase.startswith("__"):
+    if not heard_name or not phrase or phrase == text:
         return None
-    amount_at = text.find(phrase)
+    # An MC correction can deliberately contain two amounts, so
+    # ``_amount_phrase`` returns the ambiguity sentinel.  It is still vital
+    # to recognise that both amounts occurred before the next donor's name;
+    # otherwise that donor inherits the corrected amount and every later
+    # announcement can become shifted by one person.
+    if phrase.startswith("__"):
+        amount_marker = re.search(
+            r"(?:₦|\$|£)\s*\d|\b\d[\d,]*(?:\.\d+)?\s*(?:k|thousand|million|naira|dollars?|pounds?)?\b|"
+            r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|quarter|half)\b",
+            text,
+            re.IGNORECASE,
+        )
+        amount_at = amount_marker.start() if amount_marker else -1
+        amount_end = amount_marker.end() if amount_marker else -1
+    else:
+        amount_at = text.find(phrase)
+        amount_end = amount_at + len(phrase)
     if amount_at < 0:
         return None
     candidates = []
-    title = NAME_START.search(text, amount_at + len(phrase))
+    title = NAME_START.search(text, amount_end)
     if title:
         candidates.append(title.start())
     for guest in matched_guests:
         first = guest["name"].split()[0]
-        found = re.search(re.escape(first), text[amount_at + len(phrase):], re.IGNORECASE)
+        found = re.search(re.escape(first), text[amount_end:], re.IGNORECASE)
         if found:
-            candidates.append(amount_at + len(phrase) + found.start())
+            candidates.append(amount_end + found.start())
     if not candidates:
         return None
     name_at = min(candidates)
@@ -230,9 +246,21 @@ class TurnWindow:
         return self.take_unpaired()
 
     def add(self, turn: Turn) -> tuple[Optional[Turn], Optional[Turn], Optional[str]]:
-        if turn.split_at is not None and turn.amount.is_clear:
+        if turn.split_at is not None:
             amount_part, name_part = split_turn(turn)
-            result = self._add(amount_part)
+            if amount_part.amount.is_clear:
+                result = self._add(amount_part)
+            elif self.pending_name and self._fresh(amount_part, self.pending_name):
+                # A correction such as "50,000, sorry, 70,000. Dr Tola"
+                # belongs to the pending donor.  Keep it as one visible,
+                # flagged line and start Dr Tola's announcement empty.
+                prior = self.pending_name
+                self.pending_name = None
+                result = prior, amount_part, amount_part.amount.reason
+            else:
+                self._drop_name()
+                self.unpaired.append(amount_part)
+                result = (None, None, amount_part.amount.reason)
             # The amount closed an earlier announcement; it must not be
             # paired with the name that follows it.
             self._drop_amount()
