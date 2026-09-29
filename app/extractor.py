@@ -28,18 +28,62 @@ def _name_phrase(text: str) -> Optional[str]:
     return match.group(1).strip(" ,.!?") if match else None
 
 
+SCALES = (("million", 1_000_000), ("thousand", 1_000), ("hundred", 100))
+ITEM = re.compile(r"\b(?:bags? of cement|generator)\b", re.IGNORECASE)
+
+
+def _largest_scale(phrase: str) -> int:
+    lower = phrase.lower()
+    return max((value for word, value in SCALES if word in lower), default=1)
+
+
+def _one_amount(text: str, left: list[int], right: tuple[int, int]) -> bool:
+    """Whether two neighbouring amount matches are parts of one spoken amount.
+
+    "two hundred and fifty thousand" and "one million, five hundred thousand"
+    are single amounts; "fifty thousand, seventy thousand" is two, and must
+    stay two so the clip is sent to a person.
+    """
+
+    gap = text[left[1]:right[0]].strip(" ,").lower()
+    if gap not in ("", "and"):
+        return False
+    first, second = text[left[0]:left[1]], text[right[0]:right[1]]
+    if re.search(r"\d", first + second):
+        return False
+    if ITEM.search(second):
+        # A small count before a gift: "one bag of cement".
+        return not gap and _largest_scale(first) == 1 and not ITEM.search(first)
+    if ITEM.search(first):
+        return False
+    first_scale, second_scale = _largest_scale(first), _largest_scale(second)
+    multiplier = first_scale < 1_000 and second_scale >= 1_000 and not re.search(r"naira|dollar|pound", first, re.IGNORECASE)
+    return first_scale > second_scale or multiplier
+
+
 def _amount_phrase(text: str) -> str:
     candidates = [
         r"(?:₦|\$|£)\s*\d[\d,]*(?:\.\d+)?\s*(?:[kKmM]|million|thousand)?",
         r"\b\d[\d,]*(?:\.\d+)?\s*(?:k|thousand|million|naira|dollars?|pounds?)\b",
-        r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|fifty|hundred|a hundred|one point five|one million|quarter(?: of)? a? million|half(?: a)? million)(?:[\s-]+(?:hundred|thousand|million|naira|dollars?|pounds?|k|only|point|five))*",
+        r"\b(?:one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety|hundred|a hundred|one point five|one million|quarter(?: of)? a? million|half(?: a)? million)\b(?:[\s-]+(?:one|two|three|four|five|six|seven|eight|nine|hundred|thousand|million|naira|dollars?|pounds?|k|only|point)\b)*",
         r"\b(?:quarter|half)\s+(?:of\s+)?(?:a\s+)?million\b",
         r"\b(?:what a million|two-fifty)\b",
         r"\b(?:a )?bag of cement\b|\bgenerator\b",
     ]
-    found = []
+    spans = []
     for pattern in candidates:
-        found.extend(match.group(0) for match in re.finditer(pattern, text, flags=re.IGNORECASE))
+        spans.extend((m.start(), m.end()) for m in re.finditer(pattern, text, flags=re.IGNORECASE) if m.group(0).strip(" ,.!?;"))
+    # Several patterns can match the same spoken amount ("quarter of a
+    # million" and "quarter of a million naira"). Merge overlapping matches,
+    # and join a count to the gift that follows it ("one bag of cement"), so
+    # only genuinely separate amounts can make a clip ambiguous.
+    merged: list[list[int]] = []
+    for start, end in sorted(spans):
+        if merged and (start <= merged[-1][1] or _one_amount(text, merged[-1], (start, end))):
+            merged[-1][1] = max(merged[-1][1], end)
+        else:
+            merged.append([start, end])
+    found = [text[start:end] for start, end in merged]
     # A confirming transcript may contain two bare numbers in one clip. Do
     # not pick one silently: returning the full sentence makes the amount
     # parser flag the clip for an usher instead.
