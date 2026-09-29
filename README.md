@@ -84,8 +84,11 @@ money in the bank without ever crediting the wrong person?**
 - Email delivery needs SMTP settings on the server. Without them, pages are
   sent by WhatsApp, SMS or a copied link from staff phones. There is no
   automated outbound phone calling.
-- No accuracy number is published until the benchmark in
-  [`docs/evaluation.md`](docs/evaluation.md) is recorded with real voices.
+- The real-voice benchmark recorded **zero wrong-person credits, zero accepted
+  wrong amounts and zero missed pledges** across 70 spoken pledges. Of 60 clear
+  lines, 48 reached the ledger without a person and 12 required an usher. See
+  [`docs/evaluation.md`](docs/evaluation.md) for the complete result and its
+  limitations.
 - Pledgebook does not claim to understand Nigerian Pidgin, Igbo or Yoruba. It
   finds names and amounts in mixed English speech and asks a person otherwise.
 

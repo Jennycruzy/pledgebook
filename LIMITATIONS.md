@@ -15,6 +15,11 @@ This is the build status as it stands, not a list of claims.
 - The automated test suite covers access control, roles, lifecycle, guest
   administration, review rules, repeat detection, payment crediting (including
   duplicates and partial payments), webhooks and retention.
+- The fixed-answer-key benchmark used ten real recordings from two adult
+  speakers, quiet and with background music. Across 70 spoken pledges it had
+  zero wrong-person credits, zero accepted wrong amounts, zero misses and zero
+  double-counted repeats. Both corrected names were recognised on their next
+  mention. Forty-eight of 60 clear lines were automatic; 12 required an usher.
 
 ## Not yet demonstrated
 
@@ -24,10 +29,10 @@ This is the build status as it stands, not a list of claims.
 - **A full spoken conversation with the guest-side voice assistant** in a
   browser. The Voice Agent session, generated speech and tool call were verified
   with a script; the in-page conversation still needs a manual run.
-- **Recognition after a correction.** The listening list is updated during the
-  session, but no recording has yet shown an unlisted name recognised on its
-  second mention.
-- **Accuracy.** No benchmark has been recorded. See `docs/evaluation.md`.
+- **Usher workload.** The benchmark safely sent 12 of 60 clear lines to a
+  person, and one difficult music recording produced one additional flagged
+  fragment. This is safe but not hands-off automation; see
+  `docs/evaluation.md`.
 
 ## By design or by configuration
 

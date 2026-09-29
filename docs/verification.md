@@ -48,6 +48,20 @@ owner's voice stay in the Git-ignored `eval/private/` folder.
   1.6 s and 2.3 s, rechecked record 2.2 s and 2.8 s for the two cleanly
   paired pledges (local server, the recording streamed at real speed).
 
+## Fixed-answer-key voice benchmark (29 September 2026)
+
+Ten recordings from two real adult speakers covered quiet and background-music
+conditions, corrections, repeated announcements, near names, an anonymous
+donor, an in-kind gift and an unlisted name repeated after an usher correction.
+Across 70 spoken pledges the public deployment recorded zero wrong-person
+credits, zero accepted wrong amounts, zero unclear lines accepted, zero misses
+and zero double-counted repeats. Forty-eight of 60 clear lines were automatic;
+12 required an usher. All 10 deliberately unclear lines were flagged. Both
+newly corrected names were recognised on their second mention. Median live and
+rechecked latency was 3.2 s and 3.7 s respectively. The generated report,
+including every failure and one extra flagged fragment, is
+`eval/results/20260929T230646Z/report.md`.
+
 ## AssemblyAI Voice Agent
 
 - Token: `GET https://agents.assemblyai.com/v1/token` with a Bearer key returned

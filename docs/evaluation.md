@@ -1,7 +1,31 @@
 # Evaluation status
 
-No benchmark has been run. There are no accuracy, wrong-person, latency,
-time-saving, fulfilment or cost numbers for public use yet.
+The fixed-answer-key benchmark was run on the public deployment on 29 September
+2026 using ten real recordings from two adult speakers. The complete generated
+report is in `eval/results/20260929T230646Z/report.md`; its machine-readable
+companion is `results.json` in the same folder.
+
+## Final measured result
+
+- 10 recordings and 70 spoken pledges.
+- **0 wrong-person credits.**
+- **0 wrong amounts accepted for the right person.**
+- **0 unclear lines accepted without a person.**
+- **0 missed pledges and 0 repeated announcements counted twice.**
+- 48 of 60 clear lines reached the ledger without a person; 12 clear lines
+  required an usher.
+- All 10 lines designed to require a person were correctly flagged.
+- One difficult music recording produced one additional flagged fragment; it
+  was not credited.
+- Spoken-to-live latency: median 3.2 s, p90 7.8 s (n=70).
+- Spoken-to-rechecked latency: median 3.7 s, p90 8.3 s (n=70).
+- For both speakers, the unlisted name corrected during script C was recognised
+  live and spelled exactly on its second mention in the same session.
+
+This measures the supplied scripts, speakers, room conditions and configured
+₦10,000 event minimum. It is not a general speech-recognition accuracy claim.
+The principal remaining cost is usher workload: 20% of otherwise-clear lines
+required review.
 
 ## What has been observed
 
@@ -36,12 +60,8 @@ step. The report lists wrong-person credits first, then every outcome, what
 Realtime and Sync each contributed, timing, the name-learning result, and
 every line with its live and rechecked words.
 
-## The benchmark still to record
+## Reporting rule
 
-- At least two different real speakers, with and without background music,
-  reading scripts with known answer keys, including unlisted names said twice.
-- Report, in this order: **wrong-person count**, names and amounts right, lines
-  correctly flagged, time from speech to the live screen, time to a rechecked
-  record, and corrected names recognised on their next mention.
-- Every failure is reported alongside the result before any figure is used
-  publicly.
+Every failure remains in the generated report alongside the aggregate result.
+Do not quote the automatic rate without also stating the zero-miscredit safety
+result and the 12 clear lines that required a person.

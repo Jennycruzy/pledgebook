@@ -9,3 +9,5 @@ __pycache__/
 *.pyc
 # Owner-approved recording for sample events; kept off the public repository.
 demo-sample.wav
+# Human benchmark voices stay local; only the scored report is published.
+recordings/
