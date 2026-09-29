@@ -222,6 +222,7 @@ class TurnWindow:
         self.pending_name: Optional[Turn] = None
         self.pending_amount: Optional[Turn] = None
         self.pending_correction: Optional[Turn] = None
+        self.unsafe_after_correction = False
         self.unpaired: list[Turn] = []
 
     def _fresh(self, current: Turn, pending: Optional[Turn]) -> bool:
@@ -244,6 +245,15 @@ class TurnWindow:
                 amount=Amount(None, None, None, CORRECTION_PENDING),
             ))
             self.pending_correction = None
+            # The corrected value arrived too late to attach safely.  Do not
+            # auto-credit later pairs in this sequence: speech segmentation
+            # can now be shifted by one donor until a person reviews it.
+            self.unsafe_after_correction = True
+
+    def _safe_amount(self, turn: Turn) -> Turn:
+        if not self.unsafe_after_correction:
+            return turn
+        return replace(turn, amount=Amount(None, None, None, CORRECTION_PENDING))
 
     def take_unpaired(self) -> list[Turn]:
         names, self.unpaired = self.unpaired, []
@@ -317,7 +327,8 @@ class TurnWindow:
             if CORRECTION_CUE.search(turn.text):
                 self.pending_correction = turn
                 return None, None, None
-            return name_turn, amount_turn, None
+            guarded = self._safe_amount(amount_turn)
+            return name_turn, guarded, guarded.amount.reason
         if name_turn and not amount_turn and "More than one amount" in (turn.amount.reason or ""):
             self._drop_name()
             self._drop_amount()
@@ -329,7 +340,8 @@ class TurnWindow:
             if self.pending_name:
                 prior = self.pending_name
                 self.pending_name = None
-                return prior, amount_turn, None
+                guarded = self._safe_amount(amount_turn)
+                return prior, guarded, guarded.amount.reason
             previous = self.pending_amount
             self.pending_amount = amount_turn
             if previous:
@@ -338,7 +350,8 @@ class TurnWindow:
             if self.pending_amount:
                 prior = self.pending_amount
                 self.pending_amount = None
-                return name_turn, prior, None
+                guarded = self._safe_amount(prior)
+                return name_turn, guarded, guarded.amount.reason
             self._drop_name()
             self.pending_name = name_turn
         return None, None, None

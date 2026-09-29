@@ -143,6 +143,29 @@ def test_unfinished_correction_is_flushed_for_a_person():
     assert "correction" in left[0].amount.reason.lower()
 
 
+def test_late_correction_prevents_downstream_amounts_from_being_auto_credited():
+    guests = [
+        {"id": 1, "name": "Ibrahim Musa"},
+        {"id": 2, "name": "Tola Adeyemi"},
+        {"id": 3, "name": "Segun Ogunleye"},
+    ]
+    window = TurnWindow()
+    first = "Alhaji Ibrahim Musa. ₦50,000. Sorry."
+    window.add(extract_turn(first, _words(first, 0), guests))
+
+    late = "Dr Tola Adeyemi. ₦70,000."
+    name, amount, reason = window.add(extract_turn(late, _words(late, 10_000), guests))
+    assert name.name == "Tola Adeyemi"
+    assert amount.amount.minor is None
+    assert "correction" in reason.lower()
+
+    following = "Pastor Segun Ogunleye. ₦1 million."
+    name, amount, reason = window.add(extract_turn(following, _words(following, 14_000), guests))
+    assert name.name == "Segun Ogunleye"
+    assert amount.amount.minor is None
+    assert "correction" in reason.lower()
+
+
 def test_amount_before_next_name_closes_pending_announcement_without_a_cascade():
     """Regression from script C: Bukola's amount and the following Chief shared a turn."""
 
