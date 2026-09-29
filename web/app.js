@@ -7,6 +7,8 @@ const shortTime = (value) => value ? new Date(value).toLocaleTimeString([], {hou
 function showError(message) { $('error').textContent = message; $('error').hidden = false; window.clearTimeout(showError.timer); showError.timer = window.setTimeout(clearError, 8000); }
 function clearError() { $('error').hidden = true; }
 function setConnection(label, mode = '') { $('connection').className = `connection ${mode}`; $('connection').innerHTML = `<span class="status-dot"></span><span>${esc(label)}</span>`; }
+function setOptionalText(id, value) { const node = $(id); if (node) node.textContent = value; }
+function showMicError(message) { const node = $('mic-error'); if (node) { node.textContent = message; node.hidden = false; } showError(message); }
 async function api(url, options = {}) { const headers = {'Content-Type':'application/json', ...(options.headers || {})}; if (options.body instanceof FormData) delete headers['Content-Type']; const response = await fetch(url, {...options, headers}); const body = await response.json().catch(() => ({})); if (!response.ok) throw new Error(body.detail || body.error || `Request failed (${response.status})`); return body; }
 
 function render() {
@@ -14,7 +16,7 @@ function render() {
   const {event, pledges, guests, totals, payments = {}} = state.event;
   $('event-title').textContent = event.name;
   $('event-label').textContent = `${event.organisation} · ${event.event_date}`;
-  $('event-mode').textContent = event.demo ? 'Demo workspace' : (event.status === 'live' ? 'Live event' : 'Event setup');
+  setOptionalText('event-mode', event.demo ? 'Demo workspace' : (event.status === 'live' ? 'Live event' : 'Event setup'));
   $('total').textContent = money(totals.pledged);
   $('received-total').textContent = money(totals.received);
   $('target-label').textContent = event.target_minor ? `Target ${money(event.target_minor)}` : 'No target set';
@@ -39,8 +41,7 @@ function render() {
   $('summary-text').innerHTML = `<div><strong>${pledges.length}</strong><span>Pledges captured</span></div><div><strong>${corrections}</strong><span>Recheck corrections</span></div><div><strong>${unresolved}</strong><span>Needs checking</span></div><div><strong>${learned}</strong><span>Recognised after a correction</span></div>`;
   $('register-list').innerHTML = pledges.length ? pledges.map(pledgeRow).join('') : '<div class="empty-list">The register will fill as pledges are heard.</div>';
   const flags = pledges.filter((p) => p.state === 'flagged');
-  $('review-count').hidden = !flags.length;
-  $('review-count').textContent = flags.length;
+  if ($('review-count')) { $('review-count').hidden = !flags.length; $('review-count').textContent = flags.length; }
   $('review-list').innerHTML = flags.length ? flags.map(reviewRow).join('') : '<div class="empty-list">Nothing needs checking right now.</div>';
   const usherUrl = `${location.origin}${location.pathname}?event=${encodeURIComponent(event.id)}&view=usher`;
   $('usher-link').href = usherUrl;
@@ -72,7 +73,7 @@ function render() {
   $('mic').disabled = !isLive || state.micPhase === 'connecting' || state.micPhase === 'stopping';
   $('upload-audio').disabled = !isLive;
   $('sample-audio').disabled = !isLive;
-  if (!isLive) { $('mic-label').textContent = 'Go live first'; $('mic-state').textContent = 'Offline'; }
+  if (!isLive) { $('mic-label').textContent = 'Go live first'; setOptionalText('mic-state', 'Offline'); }
 }
 function labelFor(state) { return ({provisional:'Provisional',confirmed:'Confirmed',corrected:'Rechecked — changed',flagged:'Needs checking',rejected:'Rejected',redeemed:'Redeemed'}[state] || state); }
 function pledgeRow(p) { const payment = (state.event.payments?.records || []).find((item) => item.pledge_id === p.id); const paid = payment?.status === 'success' && payment.paid_at ? ` · paid ${shortTime(payment.paid_at)}` : ''; const spoken = p.created_at ? `Spoken ${shortTime(p.created_at)}` : ''; return `<div class="pledge-row"><div class="pledge-main"><div class="pledge-name">${esc(p.matched_name || p.heard_name || 'Name unclear')}</div><div class="pledge-sub">${spoken}${paid} · Heard: ${esc(p.live_text || '—')}${p.recheck_text ? ` · Rechecked: ${esc(p.recheck_text)}` : ''}${p.reason ? ` · ${esc(p.reason)}` : ''}${p.recognised_from_pledge_id ? ' · Recognised from a correction' : ''}</div>${p.id ? `<audio controls preload="none" src="/api/audio/${state.event.event.id}/${p.id}"></audio>` : ''}</div><div><div class="pledge-amount">${p.item ? esc(p.item) : money(p.amount,p.currency)}</div><span class="state ${p.state}">${labelFor(p.state)}</span></div></div>`; }
@@ -88,14 +89,14 @@ async function startMic() {
   if (state.micPhase === 'listening') return stopMic();
   if (state.micPhase !== 'idle') return;
   clearError();
-  $('mic-error').hidden = true;
+  if ($('mic-error')) $('mic-error').hidden = true;
   if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
     const message = 'Microphone access requires HTTPS, or localhost during local development.';
-    $('mic-error').textContent = message; $('mic-error').hidden = false; showError(message); return;
+    showMicError(message); return;
   }
   state.micPhase = 'connecting';
   $('mic').disabled = true; $('mic').className = 'mic-button connecting'; $('mic-label').textContent = 'Connecting…';
-  $('mic-state').textContent = 'Connecting'; $('capture-title').textContent = 'Opening the microphone'; setConnection('Connecting microphone', 'connecting');
+  setOptionalText('mic-state', 'Connecting'); setOptionalText('capture-title', 'Opening the microphone'); setConnection('Connecting microphone', 'connecting');
   try {
     state.stream = await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:false, noiseSuppression:false, channelCount:1}});
     state.audio = new AudioContext(); await state.audio.audioWorklet.addModule('/static/pcm-worklet.js');
@@ -105,22 +106,22 @@ async function startMic() {
     socket.onmessage = async (message) => {
       const payload = JSON.parse(message.data);
       if (payload.type === 'connection') {
-        state.micPhase = 'listening'; $('mic').disabled = false; $('mic').className = 'mic-button active'; $('mic-label').textContent = 'Stop listening'; $('mic-state').textContent = 'Listening'; $('capture-title').textContent = 'Capturing the MC'; setConnection('Microphone live', 'listening');
+        state.micPhase = 'listening'; $('mic').disabled = false; $('mic').className = 'mic-button active'; $('mic-label').textContent = 'Stop listening'; setOptionalText('mic-state', 'Listening'); setOptionalText('capture-title', 'Capturing the MC'); setConnection('Microphone live', 'listening');
         state.source.connect(state.worklet); state.worklet.port.onmessage = (audioMessage) => { if (socket.readyState === WebSocket.OPEN) socket.send(audioMessage.data); };
       } else if (payload.type === 'realtime') {
         const realtime = payload.event; if (realtime.transcript) { $('live-text').textContent = realtime.transcript; $('live-status').textContent = realtime.end_of_turn ? 'Turn heard' : 'Listening'; }
       } else if (payload.type === 'pledge') { state.event = payload.state; render(); }
-      else if (payload.type === 'error') { $('mic-error').textContent = payload.message; $('mic-error').hidden = false; showError(payload.message); }
+      else if (payload.type === 'error') showMicError(payload.message);
     };
-    socket.onerror = () => { const message = 'The live audio connection could not be opened. Check the server connection and try again.'; $('mic-error').textContent = message; $('mic-error').hidden = false; showError(message); };
+    socket.onerror = () => showMicError('The live audio connection could not be opened. Check the server connection and try again.');
     socket.onclose = () => { if (state.socket === socket) { cleanupMic(false); setConnection('Ready'); } };
   } catch (error) {
     const message = error.name === 'NotAllowedError' ? 'Microphone permission was denied. Allow access in your browser settings, then try again.' : error.name === 'NotFoundError' ? 'No microphone was found on this device.' : `Microphone could not start: ${error.message}`;
-    cleanupMic(); $('mic-error').textContent = message; $('mic-error').hidden = false; showError(message);
+    cleanupMic(); showMicError(message);
   }
 }
-function stopMic() { if (state.micPhase !== 'listening') return; state.micPhase = 'stopping'; $('mic').disabled = true; $('mic').className = 'mic-button connecting'; $('mic-label').textContent = 'Finishing…'; $('mic-state').textContent = 'Finishing'; if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({type:'stop'})); else cleanupMic(); }
-function cleanupMic(closeSocket = true) { const socket = state.socket; state.socket = null; if (state.worklet) { state.worklet.port.onmessage = null; state.worklet.disconnect(); } if (state.source) state.source.disconnect(); state.stream?.getTracks().forEach(track => track.stop()); state.audio?.close(); if (closeSocket && socket && socket.readyState < WebSocket.CLOSING) socket.close(); state.worklet = null; state.source = null; state.stream = null; state.audio = null; state.micPhase = 'idle'; $('mic').className = 'mic-button'; $('mic').disabled = state.event?.event?.status !== 'live'; $('mic-label').textContent = state.event?.event?.status === 'live' ? 'Start listening' : 'Go live first'; $('mic-state').textContent = 'Ready'; $('capture-title').textContent = 'Ready when you are'; }
+function stopMic() { if (state.micPhase !== 'listening') return; state.micPhase = 'stopping'; $('mic').disabled = true; $('mic').className = 'mic-button connecting'; $('mic-label').textContent = 'Finishing…'; setOptionalText('mic-state', 'Finishing'); if (state.socket?.readyState === WebSocket.OPEN) state.socket.send(JSON.stringify({type:'stop'})); else cleanupMic(); }
+function cleanupMic(closeSocket = true) { const socket = state.socket; state.socket = null; if (state.worklet) { state.worklet.port.onmessage = null; state.worklet.disconnect(); } if (state.source) state.source.disconnect(); state.stream?.getTracks().forEach(track => track.stop()); state.audio?.close(); if (closeSocket && socket && socket.readyState < WebSocket.CLOSING) socket.close(); state.worklet = null; state.source = null; state.stream = null; state.audio = null; state.micPhase = 'idle'; $('mic').className = 'mic-button'; $('mic').disabled = state.event?.event?.status !== 'live'; $('mic-label').textContent = state.event?.event?.status === 'live' ? 'Start listening' : 'Go live first'; setOptionalText('mic-state', 'Ready'); setOptionalText('capture-title', 'Ready when you are'); }
 
 function randomCallId() { if (crypto.randomUUID) return crypto.randomUUID(); return `${Date.now()}-${Math.random().toString(16).slice(2)}`; }
 function base64FromBuffer(buffer) { const bytes = new Uint8Array(buffer); let binary = ''; for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000)); return btoa(binary); }

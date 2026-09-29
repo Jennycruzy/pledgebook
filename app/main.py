@@ -270,7 +270,7 @@ async def healthz():
 
 @app.get("/")
 async def index():
-    return FileResponse(ROOT / "web" / "index.html")
+    return FileResponse(ROOT / "web" / "index.html", headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.get("/static/{path:path}")
@@ -278,7 +278,7 @@ async def static_file(path: str):
     file = (ROOT / "web" / path).resolve()
     if ROOT / "web" not in file.parents or not file.is_file():
         raise HTTPException(404, "File was not found")
-    return FileResponse(file)
+    return FileResponse(file, headers={"Cache-Control": "no-cache, must-revalidate"})
 
 
 @app.post("/api/events")
