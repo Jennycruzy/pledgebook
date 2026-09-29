@@ -12,10 +12,20 @@ from .core import SAMPLE_RETENTION_HOURS, add_usage, database, settings
 from .db import now
 
 
+# Invented guests. Several share names heard in the owner-approved sample
+# recording, so a rehearsal shows confirmed lines as well as review
+# questions; the rest never appear in it. Emails use the reserved
+# example.org domain so nothing can reach a real person.
 SAMPLE_GUESTS = [
-    ("Ms", "Amina Yusuf"),
-    ("Mr", "Chinedu Obi"),
-    ("Dr", "Tola Adeyemi"),
+    ("Deaconess", "Ngozi Eze", "ngozi.eze@example.org", True),
+    ("Engineer", "Tunde Bakare", "tunde.bakare@example.org", True),
+    ("Brother", "Segun Ogunleye", "segun.ogunleye@example.org", True),
+    ("Mrs", "Aisha Bello", "", False),
+    ("Dr", "Ifeanyi Obi", "", False),
+    ("Pastor", "Kelechi Amadi", "kelechi.amadi@example.org", True),
+    ("Ms", "Amina Yusuf", "", False),
+    ("Mr", "Chinedu Obi", "", False),
+    ("Dr", "Tola Adeyemi", "", False),
 ]
 
 
@@ -29,12 +39,12 @@ def create_sample_event(org_id: str, user: dict) -> str:
     database.execute(
         "INSERT INTO events(id, name, organisation, event_date, demo, sample, status, created_at, expires_at, org_id, created_by) "
         "VALUES (?, ?, ?, ?, 0, 1, 'setup', ?, ?, ?, ?)",
-        (event_id, "Sample launching", "Sample organisation", date.today().isoformat(), now(), expires, org_id, user["id"]),
+        (event_id, "Harvest Thanksgiving Launching", "Grace Chapel (sample)", date.today().isoformat(), now(), expires, org_id, user["id"]),
     )
-    for title, name in SAMPLE_GUESTS:
+    for title, name, email, consent in SAMPLE_GUESTS:
         database.execute(
-            "INSERT INTO guests(event_id, title, name, consent_to_contact, created_at) VALUES (?, ?, ?, 0, ?)",
-            (event_id, title, name, now()),
+            "INSERT INTO guests(event_id, title, name, email, consent_to_contact, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+            (event_id, title, name, email, int(consent), now()),
         )
     add_usage(org_id, "events_created", 1)
     database.audit(event_id, "sample_event_created", {"invented_names": True, "expires_at": expires}, actor=user)

@@ -124,3 +124,31 @@ def test_a_late_recheck_does_not_undo_a_person_unless_it_disagrees(owner, event,
     row = database.one("SELECT * FROM pledges WHERE id = ?", (walk_in,))
     assert row["state"] == "flagged" and "10,000" in row["reason"]
     audio.close()
+
+
+def test_a_bare_small_number_goes_to_a_person(owner, event, monkeypatch):
+    # From the owner's recording: both passes heard "Engineer Tunde Bakare, 250."
+    # where earlier runs heard N100,000. A bare 250 must not be confirmed.
+    monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
+    guest = add_guest(owner, event["id"], name="Tunde Bakare")
+    audio = fake_session(event["id"])
+    bare = live(event["id"], audio, "Engineer Tunde Bakare, 250.", 1000, [guest])
+    row = database.one("SELECT state, reason FROM pledges WHERE id = ?", (bare,))
+    assert row["state"] == "flagged" and "no naira" in row["reason"]
+    fresh = fake_session(event["id"])
+    clear = live(event["id"], fresh, "Engineer Tunde Bakare, 250 thousand naira.", 1000, [guest])
+    assert database.one("SELECT state FROM pledges WHERE id = ?", (clear,))["state"] == "provisional"
+    audio.close()
+    fresh.close()
+
+
+def test_a_flagged_recheck_never_overwrites_the_live_amount(owner, event, monkeypatch):
+    monkeypatch.setattr(capture_module, "confirm_pledge", lambda *a: asyncio.sleep(0))
+    guest = add_guest(owner, event["id"], name="Tunde Bakare")
+    audio = fake_session(event["id"])
+    pledge_id = live(event["id"], audio, "Engineer Tunde Bakare, 250,000 naira.", 1000, [guest])
+    monkeypatch.setattr(capture_module, "sync_transcribe", _sync_hearing("Engineer Tunde Bakare, 250."))
+    run(confirm_pledge(event["id"], pledge_id))
+    row = database.one("SELECT * FROM pledges WHERE id = ?", (pledge_id,))
+    assert row["state"] == "flagged" and row["amount_minor"] == 250_000 and row["recheck_amount_minor"] == 250
+    audio.close()

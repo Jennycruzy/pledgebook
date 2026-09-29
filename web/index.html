@@ -2,26 +2,19 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Pledgebook</title>
-  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns=%27http://www.w3.org/2000/svg%27 viewBox=%270 0 32 32%27%3E%3Crect width=%2732%27 height=%2732%27 rx=%278%27 fill=%27%23176b4d%27/%3E%3Ctext x=%2716%27 y=%2722%27 font-family=%27sans-serif%27 font-size=%2718%27 font-weight=%27800%27 fill=%27white%27 text-anchor=%27middle%27%3EP%3C/text%3E%3C/svg%3E">
-  <link rel="stylesheet" href="/static/styles.css?v=7">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pledgebook — every spoken pledge, checked and collected</title>
+  <meta name="description" content="Pledgebook listens to the MC at a fundraising launching, checks every pledge twice, asks a person when anything is unclear, and follows each guest up until it is paid.">
+  <meta name="theme-color" content="#0b7a55">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="preload" href="/static/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/plus-jakarta-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="stylesheet" href="/static/styles.css?v=8">
 </head>
 <body>
-  <header class="topbar">
-    <a class="brand" href="#/events"><span class="brand-mark">P</span><span>Pledgebook</span></a>
-    <nav id="account-nav" class="account-nav" hidden>
-      <a href="#/events" data-nav="events">Events</a>
-      <a href="#/settings" data-nav="settings">Settings</a>
-      <select id="org-switch" aria-label="Organisation" hidden></select>
-      <span id="account-name" class="muted"></span>
-      <button id="sign-out" class="quiet small" type="button">Sign out</button>
-    </nav>
-    <div id="connection" class="connection" hidden><span class="status-dot"></span><span>Ready</span></div>
-  </header>
-  <main id="app" class="shell" aria-live="polite"></main>
-  <div id="error" class="error" role="alert" hidden></div>
+  <div id="root"></div>
+  <div id="toasts" class="toasts" aria-live="polite"></div>
   <dialog id="dialog" class="dialog"></dialog>
-  <script src="/static/app.js?v=7" type="module"></script>
+  <script src="/static/app.js?v=8" type="module"></script>
 </body>
 </html>

@@ -183,6 +183,8 @@ async def confirm_pledge(event_id: str, pledge_id: int) -> None:
             return
         if not amount.is_clear:
             state, reason = "flagged", amount.reason or "Amount unclear — please check the recording."
+        elif bare_small_amount(amount, text):
+            state, reason = "flagged", BARE_AMOUNT.format(amount=f"₦{amount.minor:,}")
         elif pledge.get("currency") and amount.currency and pledge["currency"] != amount.currency:
             state, reason = "flagged", "The recheck heard a different currency — please check."
         elif current_guest and recheck_guest and current_guest != recheck_guest:
@@ -216,7 +218,8 @@ async def confirm_pledge(event_id: str, pledge_id: int) -> None:
         database.execute(
             "UPDATE pledges SET guest_id = ?, recheck_text = ?, amount_minor = ?, currency = ?, matched_name = ?, state = ?, reason = ?, "
             "safe_audio_path = ?, safe_audio_reason = ?, recheck_amount_minor = ?, recheck_guest_id = ?, recheck_ms = ?, rechecked_at = ?, updated_at = ? WHERE id = ?",
-            (current_guest, text, amount.minor if amount.minor is not None else pledge["amount_minor"], amount.currency or pledge["currency"],
+            (current_guest, text, amount.minor if state in ("confirmed", "corrected") and amount.minor is not None else pledge["amount_minor"],
+             amount.currency if state in ("confirmed", "corrected") and amount.currency else pledge["currency"],
              matched_name if current_guest else ("Anonymous donor" if anonymous and state == "confirmed" else ""),
              state, reason, str(safe_path) if safe_path else None, safe_reason, amount.minor, recheck_guest, elapsed_ms, now(), now(), pledge_id),
         )
@@ -249,6 +252,16 @@ async def record_recheck_after_review(event_id: str, pledge: dict, text: str, wo
                    pledge["id"], actor={"label": "AssemblyAI Sync"})
 
 
+SCALE_WORDS = re.compile(r"₦|naira|thousand|million|\d\s*k\b|\bk\b", re.IGNORECASE)
+BARE_AMOUNT = "The amount was heard as {amount} with no naira, thousand or million. Please check the recording."
+
+
+def bare_small_amount(amount, text: str) -> bool:
+    """A small number said without naira or a scale ("250") is ambiguous at a launching."""
+
+    return amount.minor is not None and not amount.item and amount.minor < 1000 and not SCALE_WORDS.search(text or "")
+
+
 ADD_ON = re.compile(r"\b(?:add(?:ing)?|another|plus|extra|in addition)\b", re.IGNORECASE)
 REPEAT_WINDOW_MS = 60000
 
@@ -265,6 +278,8 @@ async def create_live_pledge(event_id: str, capture: CaptureAudio, live_text: st
     state, reason = "provisional", ""
     if not amount.is_clear:
         state, reason = "flagged", amount.reason or "Amount unclear — please check."
+    elif bare_small_amount(amount, amount_turn.text):
+        state, reason = "flagged", BARE_AMOUNT.format(amount=f"₦{amount.minor:,}")
     elif not name_turn.name:
         state, reason = "flagged", "Name unclear — please confirm."
     elif name_match and name_match.kind == "anonymous":
