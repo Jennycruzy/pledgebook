@@ -1,24 +1,37 @@
 # Pledgebook
 
-> **Speech does not become financial truth just because it was heard once.**
->
-> Realtime hears the room. Sync independently rechecks the exact pledge clip.
-> Anything uncertain goes to a person. Only then does a pledge enter collection.
+**Pledgebook turns the pledges shouted at a fundraiser into money in the bank, with audio proof of who promised what.**
 
-At a Nigerian church launching or school fundraiser, pledges are shouted across a
-noisy hall: *"A guest pledges two hundred and fifty thousand naira!"*
-Someone scribbles it on paper, half the names are misspelled, and months later
-nobody can say who promised what. Pledgebook listens to the MC, keeps the exact
-audio of every pledge as evidence, checks it twice, asks a person whenever the
-two passes disagree or anything is unclear, and then gives every guest a private
-page to pay, promise a date, or say that something is wrong.
+**Live:** [pledgebook.isobars.xyz](https://pledgebook.isobars.xyz/) · Built on AssemblyAI Realtime, Sync and Voice Agent, with Paystack payments.
 
-**Live:** [pledgebook.isobars.xyz](https://pledgebook.isobars.xyz/)
-— create an account for your organisation, or follow the
+## The problem
+
+At a Nigerian church launching or school fundraiser, millions of naira are
+promised out loud in one evening. The MC calls out *"Chief Emeka Okonkwo,
+two hundred and fifty thousand naira!"* over music and applause. Someone
+writes it on paper, names get misspelled, amounts get misheard, and months
+later nobody can prove who promised what, so the money is never collected.
+
+## What Pledgebook does
+
+1. **Hears every pledge live.** The MC's microphone streams to AssemblyAI
+   Realtime. Each pledge appears on screen within seconds, with the audio clip
+   it came from kept as evidence.
+2. **Checks it twice.** AssemblyAI Sync re-transcribes every clip
+   independently. If both passes agree, the pledge is confirmed.
+3. **Asks a person when unsure.** An unknown name, two amounts in one breath or
+   a number without "thousand" goes to an usher's phone. Nothing is guessed.
+4. **Collects it.** Every guest gets a private pledge page. They can hear the
+   moment they pledged, pay all or part through Paystack, pick a date, report
+   a mistake, or just talk to an AssemblyAI voice agent that confirms who they
+   are and takes them to payment.
+
+The rule behind every design choice: **a pledge heard once is not yet a fact.**
+It enters the ledger only after two independent passes agree, or a person
+decides.
+
+Try it: create an account for your organisation, or follow the
 [`operator walkthrough`](docs/judge-guide.md).
-
-The hard question it answers: **can a promise shouted across a noisy hall become
-money in the bank without ever crediting the wrong person?**
 
 ## Proven end to end, on real voices
 
