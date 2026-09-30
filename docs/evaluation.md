@@ -76,7 +76,7 @@ names, three scripts (`scripts.md`), and an answer key written before any
 recording. Record each script as described, then:
 
 ```sh
-python eval/benchmark/run.py --base https://pledgebook.54-154-121-30.sslip.io \
+python eval/benchmark/run.py --base https://pledgebook.isobars.xyz \
     --email <owner email> recordings/*.wav
 ```
 

@@ -13,12 +13,33 @@ audio of every pledge as evidence, checks it twice, asks a person whenever the
 two passes disagree or anything is unclear, and then gives every guest a private
 page to pay, promise a date, or say that something is wrong.
 
-**Open it:** [pledgebook.54-154-121-30.sslip.io](https://pledgebook.54-154-121-30.sslip.io/)
+**Live:** [pledgebook.isobars.xyz](https://pledgebook.isobars.xyz/)
 — create an account for your organisation, or follow the
 [`operator walkthrough`](docs/judge-guide.md).
 
 The hard question it answers: **can a promise shouted across a noisy hall become
 money in the bank without ever crediting the wrong person?**
+
+## Proven end to end, on real voices
+
+Nothing below is mocked. Every result is from the public deployment.
+
+- **Real-voice benchmark: 70 spoken pledges, zero wrong-person credits, zero
+  accepted wrong amounts, zero missed pledges.** 48 of 60 clear lines reached
+  the ledger with no human touch; the other 12 were sent to an usher rather
+  than guessed. ([`docs/evaluation.md`](docs/evaluation.md))
+- **A voice assistant that talks back.** On a guest's private pledge page, the
+  AssemblyAI Voice Agent listens, replies in its own voice, and can be
+  interrupted mid-sentence. It calls real server tools. On 30 September 2026 it
+  refused a caller who said she was someone else, then, in a second session,
+  confirmed the real guest and opened checkout.
+- **Speech to money.** That guest paid ₦100,000 through Paystack; the signed
+  webhook credited it and the pledge moved to *Paid in full*, all logged with
+  timestamps. ([`docs/verification.md`](docs/verification.md))
+- **A working product, not a demo.** It has organisations with owner, admin and
+  usher roles, an event lifecycle, usher review on their own phones, partial
+  payments, disputes, settlement reports and an activity log. 76 automated
+  tests run in CI.
 
 ## How it works
 

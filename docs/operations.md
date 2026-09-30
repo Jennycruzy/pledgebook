@@ -39,7 +39,7 @@ cd ~/pledgebook
 git pull
 .venv/bin/pip install -r requirements.txt
 sudo systemctl restart pledgebook
-curl -fsS https://pledgebook.54-154-121-30.sslip.io/healthz
+curl -fsS https://pledgebook.isobars.xyz/healthz
 ```
 
 The database schema upgrades itself on start without deleting data.

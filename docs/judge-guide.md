@@ -1,6 +1,6 @@
 # Operator walkthrough
 
-Open **https://pledgebook.54-154-121-30.sslip.io/**. Everything below takes
+Open **https://pledgebook.isobars.xyz/**. Everything below takes
 about five minutes. AssemblyAI processes real human speech; payments use
 Paystack **test mode**, so no real money moves.
 
