@@ -44,8 +44,9 @@ This is the build status as it stands, not a list of claims.
 
 - **Payments are in Paystack test mode** on the public deployment. Real money
   needs a verified Paystack business and a live key (`docs/operations.md`).
-- **Email** needs SMTP settings; without them staff send pages by WhatsApp,
-  SMS or a copied link from their own phones.
+- **Email** is sent through SMTP, which is configured on the public
+  deployment. A self-hosted copy without SMTP settings falls back to WhatsApp,
+  SMS or a copied link sent from staff phones.
 - **No automated phone calls.** Staff call from their own phones and log the
   outcome. The voice assistant runs only on the guest's own device, from their
   private pledge page.
