@@ -1,8 +1,10 @@
 # Pledgebook
 
+![Pledgebook: pledges shouted at a fundraiser, turned into money in the bank](docs/media/cover.png)
+
 **Pledgebook turns the pledges shouted at a fundraiser into money in the bank, with audio proof of who promised what.**
 
-**Live:** [pledgebook.isobars.xyz](https://pledgebook.isobars.xyz/) · Built on AssemblyAI Realtime, Sync and Voice Agent, with Paystack payments.
+**Live:** [pledgebook.isobars.xyz](https://pledgebook.isobars.xyz/) · **Pitch deck:** [pledgebook-deck.pdf](docs/media/pledgebook-deck.pdf) · Built on AssemblyAI Realtime, Sync and Voice Agent, with Paystack payments.
 
 ## The problem
 
