@@ -53,8 +53,8 @@ Nothing below is mocked. Every result is from the public deployment.
   timestamps. ([`docs/verification.md`](docs/verification.md))
 - **A working product, not a demo.** It has organisations with owner, admin and
   usher roles, an event lifecycle, usher review on their own phones, partial
-  payments, disputes, settlement reports and an activity log. 76 automated
-  tests run in CI.
+  payments, disputes, settlement reports and an activity log. 112 automated
+  tests.
 
 ## How it works
 

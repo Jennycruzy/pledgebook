@@ -11,3 +11,4 @@ __pycache__/
 demo-sample.wav
 # Human benchmark voices stay local; only the scored report is published.
 recordings/
+web/share/
