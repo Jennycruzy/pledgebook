@@ -27,8 +27,8 @@ owner's voice stay in the Git-ignored `eval/private/` folder.
   non-final reading of `200,000` became a final `250,000 naira`. Pledgebook
   therefore pairs adjacent final turns and never records non-final text.
 - `{"type": "UpdateConfiguration", "keyterms_prompt": [...]}` is accepted
-  mid-session. That proves the message is accepted, not that recognition
-  improves; see `LIMITATIONS.md`.
+  mid-session. The benchmark below then showed the corrected name recognised
+  and spelled exactly on its next mention for both speakers.
 - The browser microphone path on the current build (29 September 2026) streamed
   the real recording through a fake Chromium microphone for 75 seconds: seven
   lines, both listed guests confirmed with the right amounts, five flagged, none

@@ -27,6 +27,33 @@ This measures the supplied scripts, speakers, room conditions and configured
 The principal remaining cost is usher workload: 20% of otherwise-clear lines
 required review.
 
+## What each pass contributed
+
+Realtime alone was right on all 48 automatic lines; the Sync recheck corrected
+no clear line on its own. Its measured value is evidence for the person who
+reviews, not extra automatic accuracy. The 12 clear lines that went to an
+usher, taken from the stored live and rechecked readings:
+
+| Why it went to a person | Lines | Did the recheck have the right record? |
+|---|---:|---|
+| Realtime split the name from the amount; the recheck heard both | 4 | Yes, the usher confirms it |
+| Realtime heard two amounts; the recheck heard one | 3 | Yes, the usher confirms it |
+| Held after a spoken correction earlier in the sequence | 2 | Yes, both passes agreed |
+| The recheck missed "N1 million" that Realtime heard | 1 | No, Realtime was right |
+| Neither pass read the amount | 1 | No |
+| Both passes heard ₦6,000 for ₦60,000 | 1 | No, both wrong |
+
+In 7 of the 12 the rechecked text is the answer the usher accepts. In one the
+recheck caused the review. The ₦6,000 line matters most: both passes agreed on
+the wrong amount, and only the event's ₦10,000 minimum stopped it. Two
+agreeing transcripts are not proof; the review rules are what protect the
+ledger.
+
+The slowest line, C4 for speaker 1 (26.15 s live, 26.67 s rechecked), was a
+turn split: Realtime finalised "₦60,000." without the name, so the line waited
+for a partner that never came and then went to a person with the recheck
+reading "Mrs Bukola Ajayi, ₦60,000."
+
 ## What has been observed
 
 The owner's real 70.4-second recording has been run through the current build,

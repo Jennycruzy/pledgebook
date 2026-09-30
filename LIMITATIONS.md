@@ -31,8 +31,12 @@ This is the build status as it stands, not a list of claims.
   with a script; the in-page conversation still needs a manual run.
 - **Usher workload.** The benchmark safely sent 12 of 60 clear lines to a
   person, and one difficult music recording produced one additional flagged
-  fragment. This is safe but not hands-off automation; see
-  `docs/evaluation.md`.
+  fragment. This is safe but not hands-off automation. In 7 of the 12 the
+  Sync recheck had the right record for the usher to confirm; it corrected no
+  line automatically. See `docs/evaluation.md`.
+- **Stored pledge-page links.** Invitation tokens are stored hashed, but
+  private pledge-page tokens are stored as issued, so a copy of the database
+  would expose open pledge pages.
 
 ## By design or by configuration
 
