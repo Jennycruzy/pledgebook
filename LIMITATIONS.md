@@ -17,6 +17,8 @@ what Pledgebook does and does not do.
   hashes, so a copy of the database cannot open a guest's pledge page. A
   link is shown once when it is sent; sending again issues a new link and
   earlier links keep working until they expire or the page is closed.
+- **Email delivery** of pledge pages works on the public deployment through
+  SMTP (Gmail). Staff can also send pages by WhatsApp, SMS or a copied link.
 - The automated test suite covers access control, roles, lifecycle, guest
   administration, review rules, repeat detection, payment crediting (including
   duplicates and partial payments), webhooks and retention.
@@ -47,9 +49,6 @@ what Pledgebook does and does not do.
 
 - **Payments are in Paystack test mode** on the public deployment. Real money
   needs a verified Paystack business and a live key (`docs/operations.md`).
-- **Email** is sent through SMTP, which is configured on the public
-  deployment. A self-hosted copy without SMTP settings falls back to WhatsApp,
-  SMS or a copied link sent from staff phones.
 - **No automated phone calls.** Staff call from their own phones and log the
   outcome. The voice assistant runs only on the guest's own device, from their
   private pledge page.
