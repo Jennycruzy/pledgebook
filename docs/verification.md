@@ -101,3 +101,16 @@ on 29 September 2026 all 21 were refused; the report is in `eval/results/`.
 AssemblyAI's hosted language-model service denied two documented models for
 this account and a third rejected the required JSON-schema output, so it is
 not part of the product.
+
+## Guest voice assistant and Paystack payment (30 September 2026)
+
+On the public deployment, on the private page for a real ₦100,000 pledge, in
+the owner's own voice from her phone (times UTC, from the activity log):
+
+- 00:14:55 session 1 started. She said she was not the guest;
+  `confirm_identity` returned false at 00:15:17 and the session ended as
+  `wrong_person`. The pledge was not discussed.
+- 00:15:44 session 2 started. Identity confirmed at 00:16:00; the assistant
+  called `open_checkout` and ended as `checkout_opened` at 00:16:35.
+- 00:17:08 Paystack's signed `charge.success` webhook credited ₦100,000 to
+  reference `pb-5a5425bdd3-57-7fd50eb5f2`; the pledge moved to *Paid in full*.

@@ -21,14 +21,16 @@ This is the build status as it stands, not a list of claims.
   double-counted repeats. Both corrected names were recognised on their next
   mention. Forty-eight of 60 clear lines were automatic; 12 required an usher.
 
+- **Guest voice assistant and payment, end to end, on the public deployment
+  (30 September 2026).** On a real pledge page the owner first told the
+  assistant she was someone else: identity was refused and the session ended
+  as `wrong_person` without the pledge being discussed. In a second session
+  she confirmed her identity, the assistant opened checkout, and she paid
+  ₦100,000 with a Paystack test card. Paystack's signed webhook credited it and
+  the pledge became *Paid in full* (reference `pb-5a5425bdd3-57-7fd50eb5f2`).
+
 ## Not yet demonstrated
 
-- **A completed test-card payment on the public deployment** with a signed
-  webhook turning a pledge to *Paid in full*. The code path is tested with a
-  stand-in Paystack; the live run needs the owner's browser.
-- **A full spoken conversation with the guest-side voice assistant** in a
-  browser. The Voice Agent session, generated speech and tool call were verified
-  with a script; the in-page conversation still needs a manual run.
 - **Usher workload.** The benchmark safely sent 12 of 60 clear lines to a
   person, and one difficult music recording produced one additional flagged
   fragment. This is safe but not hands-off automation. In 7 of the 12 the
