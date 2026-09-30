@@ -117,9 +117,9 @@ Nothing below is mocked. Every result is from the public deployment.
 - Paystack is running in **test mode** on the public deployment. The code
   switches to real payments when a live key is configured; see
   [`docs/operations.md`](docs/operations.md).
-- Email delivery needs SMTP settings on the server. Without them, pages are
-  sent by WhatsApp, SMS or a copied link from staff phones. There is no
-  automated outbound phone calling.
+- Email delivery works on the public deployment through SMTP. A self-hosted
+  copy without SMTP settings sends pages by WhatsApp, SMS or a copied link
+  from staff phones. There is no automated outbound phone calling.
 - The real-voice benchmark recorded **zero wrong-person credits, zero accepted
   wrong amounts and zero missed pledges** across 70 spoken pledges. Of 60 clear
   lines, 48 reached the ledger without a person and 12 required an usher. See
