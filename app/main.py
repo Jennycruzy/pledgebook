@@ -93,6 +93,11 @@ def page(name: str) -> FileResponse:
 
 
 @app.api_route("/", methods=["GET", "HEAD"])
+async def landing():
+    return page("landing.html")
+
+
+@app.api_route("/app", methods=["GET", "HEAD"])
 async def index():
     return page("index.html")
 
@@ -275,7 +280,7 @@ class InviteRequest(BaseModel):
 
 
 def invite_url(token: str) -> str:
-    return f"{settings.public_url}/#/invite/{token}" if settings.public_url else f"/#/invite/{token}"
+    return f"{settings.public_url}/app#/invite/{token}" if settings.public_url else f"/app#/invite/{token}"
 
 
 def qr_svg(data: str) -> str:

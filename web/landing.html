@@ -1,0 +1,225 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>Pledgebook — every spoken pledge, checked and collected</title>
+  <meta name="description" content="Pledgebook turns the pledges shouted at a fundraiser into money in the bank, with audio proof of who promised what. Built on AssemblyAI Realtime, Sync and Voice Agent.">
+  <meta name="theme-color" content="#0b7a55">
+  <link rel="icon" type="image/svg+xml" href="/static/favicon.svg">
+  <link rel="preload" href="/static/fonts/inter-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <link rel="preload" href="/static/fonts/plus-jakarta-sans-latin-wght-normal.woff2" as="font" type="font/woff2" crossorigin>
+  <script src="/static/landing-redirect.js"></script>
+  <link rel="stylesheet" href="/static/landing.css?v=2">
+</head>
+<body>
+  <canvas id="sky" class="sky" aria-hidden="true"></canvas>
+
+  <header class="nav" id="nav">
+    <a class="brand" href="/"><img src="/static/favicon.svg" alt="" width="32" height="32"> Pledgebook</a>
+    <nav>
+      <a href="#journey">How it works</a>
+      <a href="#check">Two passes</a>
+      <a href="#voice">Voice agent</a>
+      <a href="#proof">Proof</a>
+      <a class="btn ghost" href="/app#/login">Sign in</a>
+      <a class="btn primary" href="/app#/signup">Get started <span class="arrow">→</span></a>
+    </nav>
+  </header>
+
+  <main>
+    <!-- HERO -------------------------------------------------------------->
+    <section class="hero">
+      <div class="hero-copy">
+        <span class="badge"><span class="dot"></span> Built on AssemblyAI Realtime, Sync &amp; Voice Agent</span>
+        <h1 class="reveal-words">Every pledge called in the hall, <span class="shine">counted and collected.</span></h1>
+        <p class="lede">Pledgebook turns the promises shouted at a fundraiser into money in the bank, with audio proof of who promised what. It hears every pledge live, checks it twice, asks a person when unsure, and helps each guest pay.</p>
+        <div class="cta">
+          <a class="btn primary lg magnetic" href="/app#/signup">Start your first launching <span class="arrow">→</span></a>
+          <a class="btn ghost lg" href="#journey"><span class="play">▶</span> Watch a pledge travel</a>
+        </div>
+        <ul class="proof-mini">
+          <li><b data-count="70">70</b> real spoken pledges tested</li>
+          <li><b data-count="0">0</b> credited to the wrong person</li>
+          <li><b data-count="0">0</b> missed</li>
+        </ul>
+      </div>
+
+      <div class="stage" id="stage" aria-label="Illustration of a live launching" role="img">
+        <div class="rings" aria-hidden="true"><i></i><i></i><i></i><i></i></div>
+        <div class="mic" aria-hidden="true">
+          <svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10v1a7 7 0 0 0 14 0v-1M12 18v4"/></svg>
+        </div>
+        <div class="console">
+          <div class="c-top"><span>Harvest Thanksgiving Launching</span><span class="live"><i></i> Listening</span></div>
+          <div class="c-total"><small>Pledged tonight</small><span id="total" class="num">₦1,250,000</span></div>
+          <div class="c-bar"><span id="bar"></span></div>
+          <canvas id="wave" class="c-wave" height="70"></canvas>
+          <div class="c-heard" id="heard">…</div>
+          <div class="c-feed" id="feed"></div>
+          <span class="tag">Illustrative preview</span>
+        </div>
+        <div class="float-card fc1"><div class="fc-k">Private page · Chief Adaeze</div><div class="fc-a">₦250,000</div><div class="fc-bar"><span></span></div><div class="fc-k">₦160,000 paid · rest on Friday</div></div>
+        <div class="float-card fc2"><span class="tick">✓</span><div><div class="fc-k">Sync recheck</div><b>Both passes agree</b></div></div>
+        <div class="float-card fc3"><span class="flag">!</span><div><div class="fc-k">Sent to an usher</div><b>Two amounts in one breath</b></div></div>
+      </div>
+    </section>
+
+    <!-- TICKER ------------------------------------------------------------>
+    <div class="ticker" aria-hidden="true"><div class="ticker-track" id="ticker"></div></div>
+
+    <!-- JOURNEY ----------------------------------------------------------->
+    <section class="section" id="journey">
+      <div class="head">
+        <span class="eyebrow">The journey of one pledge</span>
+        <h2>From a shout across the hall to money in the account.</h2>
+        <p>Follow Chief Emeka Okonkwo's ₦250,000 as it moves through Pledgebook.</p>
+      </div>
+      <div class="journey" id="journeyRail">
+        <div class="rail" aria-hidden="true"><span id="railFill"></span><i class="spark" id="spark"></i></div>
+
+        <article class="stop" data-step="1">
+          <div class="art art-hear" aria-hidden="true">
+            <div class="bars">
+              <i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i><i></i>
+            </div>
+            <div class="typing"><span>“Chief Emeka Okonkwo, ₦250,000!”</span></div>
+          </div>
+          <span class="num-step">Heard</span>
+          <h3>Heard live</h3>
+          <p>The MC's microphone streams to AssemblyAI Realtime, with every guest name sent as a key term. The pledge is on screen within seconds, and the audio clip is kept as evidence.</p>
+        </article>
+
+        <article class="stop" data-step="2">
+          <div class="art art-check" aria-hidden="true">
+            <div class="pass p1"><small>Live reading</small><span>Emeka Okonkwo · <b>₦250,000</b></span></div>
+            <div class="pass p2"><small>Sync recheck</small><span>Emeka Okonkwo · <b>₦250,000</b></span></div>
+            <div class="stamp">Confirmed</div>
+          </div>
+          <span class="num-step">Checked</span>
+          <h3>Checked twice</h3>
+          <p>AssemblyAI Sync re-transcribes the exact clip independently. Only when both passes agree on the guest and amount is the pledge confirmed.</p>
+        </article>
+
+        <article class="stop" data-step="3">
+          <div class="art art-usher" aria-hidden="true">
+            <div class="mini-phone">
+              <div class="mp-row"><b>Amount unclear</b><small>“₦75,000 … ₦300,000”</small></div>
+              <div class="mp-play"><i></i><span></span></div>
+              <div class="mp-btns"><span>Enter amount</span><span class="on">Walk-in</span></div>
+            </div>
+          </div>
+          <span class="num-step">Decided</span>
+          <h3>A person decides the hard ones</h3>
+          <p>A new name, two amounts in one breath, a number without "thousand": it goes to an usher's phone. They play the clip and decide. Nothing is guessed.</p>
+        </article>
+
+        <article class="stop" data-step="4">
+          <div class="art art-paid" aria-hidden="true">
+            <svg class="ring" viewBox="0 0 120 120"><circle cx="60" cy="60" r="50" class="track"/><circle cx="60" cy="60" r="50" class="fill"/></svg>
+            <div class="ring-label"><b class="num" id="pct">0%</b><small>paid</small></div>
+            <div class="coins"><i></i><i></i><i></i><i></i><i></i></div>
+          </div>
+          <span class="num-step">Collected</span>
+          <h3>Collected</h3>
+          <p>Every guest gets a private page to hear their moment, pay all or part with Paystack, pick a date, or report a mistake. A signed webhook credits each payment exactly once.</p>
+        </article>
+      </div>
+    </section>
+
+    <!-- TWO PASSES -------------------------------------------------------->
+    <section class="section night" id="check">
+      <div class="glow g1" aria-hidden="true"></div><div class="glow g2" aria-hidden="true"></div>
+      <div class="head light">
+        <span class="eyebrow gold">Why it can be trusted with money</span>
+        <h2>A pledge heard once is not yet a fact.</h2>
+        <p>Two independent listens have to agree. When they don't, the line stops and waits for a person.</p>
+      </div>
+      <div class="compare" id="compare">
+        <div class="cmp-row agree">
+          <div class="who"><span class="av">NE</span><div><b>Deaconess Ngozi Eze</b><small>0:26 – 0:33 in the hall recording</small></div></div>
+          <div class="lanes">
+            <div class="lane"><small>Realtime</small><span>Deaconess Ngozi Eze. <mark>₦100,000</mark> only.</span></div>
+            <div class="lane"><small>Sync</small><span>Deaconess Ngozi Eze. <mark>₦100,000</mark> only.</span></div>
+          </div>
+          <div class="verdict v-ok">✓ Confirmed</div>
+        </div>
+        <div class="cmp-row disagree">
+          <div class="who"><span class="av gold">AB</span><div><b>Mrs Aisha Bello</b><small>0:54 – 1:07 in the hall recording</small></div></div>
+          <div class="lanes">
+            <div class="lane"><small>Realtime</small><span>Mrs Aisha Bello, <mark>₦75,000</mark>. The Youth Fellowship, <mark>₦300,000</mark>.</span></div>
+            <div class="lane"><small>Sync</small><span>Mrs. Aisha Bello, <mark>₦75,000</mark>. The Youth Fellowship, <mark>₦300,000</mark>.</span></div>
+          </div>
+          <div class="verdict v-flag">⚑ Two amounts: an usher decides</div>
+        </div>
+        <div class="cmp-row disagree">
+          <div class="who"><span class="av violet">TB</span><div><b>Engineer Tunde Bakare</b><small>0:36 – 0:39 in the hall recording</small></div></div>
+          <div class="lanes">
+            <div class="lane"><small>Realtime</small><span>Engineer Tunde Bakare. <mark>₦250,000</mark>.</span></div>
+            <div class="lane"><small>Sync</small><span>Engineer Tunde Bakare. <mark>250</mark>.</span></div>
+          </div>
+          <div class="verdict v-flag">⚑ Passes disagree: an usher decides</div>
+        </div>
+      </div>
+      <p class="fine">Real lines from the owner's 70-second launching recording, in English and Pidgin.</p>
+    </section>
+
+    <!-- VOICE AGENT ------------------------------------------------------->
+    <section class="section" id="voice">
+      <div class="split">
+        <div class="orb-stage" aria-hidden="true">
+          <div class="orb" id="orb"><i></i><i></i><i></i></div>
+          <div class="chat" id="chat"></div>
+        </div>
+        <div>
+          <span class="eyebrow">For your guests</span>
+          <h2>A voice agent that knows whose pledge it is.</h2>
+          <p class="muted">On their own private page, a guest can simply talk. The AssemblyAI Voice Agent always says it is automated, confirms who it is speaking to before it mentions money, and uses real tools to open checkout, record a date, note a dispute or stop reminders.</p>
+          <ul class="ticks">
+            <li><span>✓</span> It cannot change an amount. That tool does not exist.</li>
+            <li><span>✓</span> A wrong person is refused before the pledge is discussed.</li>
+            <li><span>✓</span> Every call and outcome lands in the activity log.</li>
+          </ul>
+          <p class="fine">The conversation on the left is from a live session on 30 September 2026.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- PROOF ------------------------------------------------------------->
+    <section class="section alt" id="proof">
+      <div class="head">
+        <span class="eyebrow">Measured, not claimed</span>
+        <h2>Tested on 70 real spoken pledges.</h2>
+        <p>Real speakers, real noise, the public deployment. The full results and their limits are published in the repository.</p>
+      </div>
+      <div class="stats">
+        <div class="stat"><b class="num" data-count="0">0</b><span>credited to the wrong person</span></div>
+        <div class="stat"><b class="num" data-count="0">0</b><span>wrong amounts accepted</span></div>
+        <div class="stat"><b class="num" data-count="0">0</b><span>pledges missed</span></div>
+        <div class="stat gold"><b class="num" data-count="48">48</b><span>of 60 clear lines reached the ledger with no human touch</span></div>
+      </div>
+      <div class="rules">
+        <div class="rule"><span class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="11" width="16" height="10" rx="2"/><path d="M8 11V7a4 4 0 0 1 8 0v4"/></svg></span><div><h3>Ushers never see contact details</h3><p>They get the review queue and the register, nothing else.</p></div></div>
+        <div class="rule"><span class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M2 12h2M6 8v8M10 5v14M14 9v6M18 7v10M22 12h-2"/></svg></span><div><h3>Evidence you can replay</h3><p>Every line keeps its clip, the live reading and the recheck side by side.</p></div></div>
+        <div class="rule"><span class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg></span><div><h3>Counted exactly once</h3><p>Paystack payments are verified by reference, amount and currency, even when notified twice.</p></div></div>
+        <div class="rule"><span class="ri"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></svg></span><div><h3>A full activity trail</h3><p>Every correction, message and payment is logged with who did it and when.</p></div></div>
+      </div>
+    </section>
+
+    <!-- CTA --------------------------------------------------------------->
+    <section class="final">
+      <canvas id="confetti" class="confetti" aria-hidden="true"></canvas>
+      <h2>Your next launching deserves a ledger you can trust.</h2>
+      <p>Set up your organisation in a minute and rehearse with a sample launching before the big day.</p>
+      <a class="btn gold lg magnetic" href="/app#/signup">Create your organisation <span class="arrow">→</span></a>
+    </section>
+  </main>
+
+  <footer class="foot">
+    <a class="brand" href="/"><img src="/static/favicon.svg" alt="" width="24" height="24"> Pledgebook</a>
+    <span>Speech by AssemblyAI · Payments by Paystack · <a href="https://github.com/Jennycruzy/pledgebook">Source on GitHub</a></span>
+  </footer>
+
+  <script src="/static/landing.js?v=2" defer></script>
+</body>
+</html>

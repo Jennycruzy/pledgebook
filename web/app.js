@@ -144,7 +144,7 @@ async function route() {
     stopEverything();
     if (section === 'login') return renderLogin();
     if (section === 'signup') return renderSignup();
-    return renderLanding();
+    location.replace('/'); return;
   }
   if (!section || section === 'login' || section === 'signup') return go('#/events');
   if (!state.me.organisation) return renderShell(`<div class="card">${empty('people', 'You are not part of an organisation yet', 'Ask an organiser to send you an invitation link, then open it while signed in.')}</div>`);
@@ -171,7 +171,7 @@ let previewTimer = 0;
 function renderLanding() {
   document.title = 'Pledgebook — every spoken pledge, checked and collected';
   root.innerHTML = `
-  <header class="site-nav" id="site-nav"><a class="brand" href="#/">${logo(32)} Pledgebook</a>
+  <header class="site-nav" id="site-nav"><a class="brand" href="/">${logo(32)} Pledgebook</a>
     <nav><a class="link" href="#how" data-scroll>How it works</a><a class="link" href="#safety" data-scroll>Safety</a><a class="link" href="#guests" data-scroll>For guests</a>
       <a class="btn btn-quiet" href="#/login">Sign in</a><a class="btn btn-primary" href="#/signup">Get started ${icon('arrowRight')}</a></nav></header>
   <main>
@@ -229,7 +229,7 @@ function renderLanding() {
     </section>
   </main>
   <section class="cta-band"><div><h2>Your next launching deserves a ledger you can trust.</h2><p>Set up your organisation in a minute. Rehearse with a sample launching before your big day.</p></div><a class="btn btn-gold btn-lg" href="#/signup">Create your organisation ${icon('arrowRight')}</a></section>
-  <footer class="site-foot"><a class="brand" href="#/">${logo(24)} Pledgebook</a><span>Speech by AssemblyAI · Payments by Paystack · Audio deleted on your schedule</span></footer>`;
+  <footer class="site-foot"><a class="brand" href="/">${logo(24)} Pledgebook</a><span>Speech by AssemblyAI · Payments by Paystack · Audio deleted on your schedule</span></footer>`;
   const nav = $('site-nav');
   addEventListener('scroll', () => nav?.classList.toggle('scrolled', scrollY > 8), { passive: true });
   root.querySelectorAll('[data-scroll]').forEach((a) => a.addEventListener('click', (e) => { e.preventDefault(); document.querySelector(a.getAttribute('href'))?.scrollIntoView({ behavior: reduced() ? 'auto' : 'smooth' }); }));
@@ -266,7 +266,7 @@ function runPreview() {
 // ------------------------------------------------------------- sign in / up
 
 function authLayout(inner) {
-  root.innerHTML = `<div class="auth"><aside class="auth-side"><a class="brand" href="#/">${logo(32)} Pledgebook</a>
+  root.innerHTML = `<div class="auth"><aside class="auth-side"><a class="brand" href="/">${logo(32)} Pledgebook</a>
     <div><h2>Every pledge called in the hall, counted and collected.</h2>
       <ul><li>${icon('mic')} Live transcription with your guest list</li><li>${icon('rotate')} An independent recheck of every clip</li><li>${icon('users')} Ushers settle anything unclear from their phones</li><li>${icon('wallet')} Private guest pages with part payments</li></ul></div>
     <p class="auth-foot">Speech by AssemblyAI · Payments by Paystack</p></aside>
@@ -275,7 +275,7 @@ function authLayout(inner) {
 
 function renderLogin(invite = '', info = null) {
   document.title = 'Sign in · Pledgebook';
-  authLayout(`<a class="brand auth-brand" href="#/">${logo(28)} Pledgebook</a>
+  authLayout(`<a class="brand auth-brand" href="/">${logo(28)} Pledgebook</a>
     <div><h1>Welcome back</h1><p class="muted">${info ? `Sign in to join <b>${esc(info.organisation)}</b> as ${esc(info.role)}.` : 'Sign in to your organisation.'}</p></div>
     <form id="login-form" class="form-grid single">
       <label class="field">Email<input name="email" type="email" autocomplete="email" required></label>
@@ -293,7 +293,7 @@ function renderLogin(invite = '', info = null) {
 
 function renderSignup(invite = '', info = null) {
   document.title = 'Create your account · Pledgebook';
-  authLayout(`<a class="brand auth-brand" href="#/">${logo(28)} Pledgebook</a>
+  authLayout(`<a class="brand auth-brand" href="/">${logo(28)} Pledgebook</a>
     <div><h1>${info ? `Join ${esc(info.organisation)}` : 'Set up your organisation'}</h1><p class="muted">${info ? `You were invited as <b>${esc(info.role)}</b>.` : 'You will be the owner. Invite admins and ushers afterwards.'}</p></div>
     <form id="signup-form" class="form-grid single">
       <label class="field">Your name<input name="name" autocomplete="name" required></label>
@@ -983,7 +983,7 @@ document.addEventListener('click', async (event) => {
   const d = target.dataset;
   const pledgeById = (id) => state.event?.pledges.find((p) => p.id === Number(id));
   try {
-    if (d.signOut !== undefined) { stopEverything(); await api('/api/auth/logout', { method: 'POST' }).catch(() => {}); state.me = false; go('#/'); return; }
+    if (d.signOut !== undefined) { stopEverything(); await api('/api/auth/logout', { method: 'POST' }).catch(() => {}); state.me = false; location.href = '/'; return; }
     if (d.themeToggle !== undefined) { const dark = document.documentElement.dataset.theme === 'dark' || (!document.documentElement.dataset.theme && matchMedia('(prefers-color-scheme: dark)').matches); document.documentElement.dataset.theme = dark ? 'light' : 'dark'; try { localStorage.setItem('pb-theme', document.documentElement.dataset.theme); } catch { /* storage unavailable */ } closeMenu(); return; }
     if (d.switchOrg) { state.me = await api('/api/me/organisation', { method: 'POST', body: { org_id: d.switchOrg } }); stopEverything(); if (location.hash === '#/events') route(); else go('#/events'); return; }
     if (d.fullscreen !== undefined) { if (document.fullscreenElement) document.exitFullscreen(); else $('bs-root')?.requestFullscreen?.(); return; }
