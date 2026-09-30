@@ -1,5 +1,6 @@
 from contextlib import contextmanager
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sqlite3
@@ -100,7 +101,7 @@ CREATE INDEX IF NOT EXISTS payments_event ON payments(event_id);
 CREATE INDEX IF NOT EXISTS payments_pledge ON payments(pledge_id);
 CREATE TABLE IF NOT EXISTS pledge_links (
   id INTEGER PRIMARY KEY AUTOINCREMENT, event_id TEXT NOT NULL REFERENCES events(id),
-  pledge_id INTEGER NOT NULL REFERENCES pledges(id), token TEXT NOT NULL UNIQUE,
+  pledge_id INTEGER NOT NULL REFERENCES pledges(id), token_hash TEXT NOT NULL UNIQUE,
   created_by INTEGER, created_at TEXT NOT NULL, expires_at TEXT NOT NULL,
   opened_at TEXT, revoked_at TEXT
 );
@@ -185,6 +186,14 @@ class Database:
             for column, definition in columns.items():
                 if column not in present:
                     conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {definition}")
+        # Pledge-page tokens used to be stored as issued. Keep only their
+        # SHA-256, so a copy of the database cannot open a guest's page.
+        link_columns = {row[1] for row in conn.execute("PRAGMA table_info(pledge_links)")}
+        if "token" in link_columns:
+            for row_id, token in conn.execute("SELECT id, token FROM pledge_links").fetchall():
+                conn.execute("UPDATE pledge_links SET token = ? WHERE id = ?",
+                             (hashlib.sha256(token.encode("utf-8")).hexdigest(), row_id))
+            conn.execute("ALTER TABLE pledge_links RENAME COLUMN token TO token_hash")
         conn.execute("UPDATE events SET sample = 1 WHERE demo = 1 AND sample = 0")
         conn.execute("CREATE INDEX IF NOT EXISTS events_org ON events(org_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS event_grants_user ON event_grants(user_id, org_id)")

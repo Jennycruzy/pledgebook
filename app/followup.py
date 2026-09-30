@@ -18,7 +18,7 @@ from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import FileResponse
 from pydantic import BaseModel, Field
 
-from .auth import client_ip, limiter
+from .auth import client_ip, limiter, token_hash
 from .core import (ACCEPTED_STATES, add_usage, auth, database, guest_label, organisation, parse_time, payment_page_url,
                    require_usage, safe_data_path, settings)
 from .capture import notify
@@ -54,27 +54,21 @@ def pledge_for_follow_up(event_id: str, pledge_id: int) -> tuple[dict, dict]:
     return pledge, guest
 
 
-def active_link(pledge_id: int) -> dict | None:
-    current = datetime.now(timezone.utc).isoformat()
-    return database.one(
-        "SELECT * FROM pledge_links WHERE pledge_id = ? AND revoked_at IS NULL AND expires_at > ? ORDER BY id DESC LIMIT 1",
-        (pledge_id, current),
-    )
+def issue_link(event: dict, pledge: dict, actor: dict) -> tuple[dict, str]:
+    """Create a pledge page and return it with its token, which is shown only now.
 
-
-def ensure_link(event: dict, pledge: dict, actor: dict) -> dict:
-    link = active_link(pledge["id"])
-    if link:
-        return link
+    Only the token's hash is stored, so each send issues a fresh link; links
+    sent earlier keep working until they expire or the page is closed.
+    """
     days = int(organisation(event["org_id"]).get("link_expiry_days") or 14)
     token = secrets.token_urlsafe(32)
     expires = (datetime.now(timezone.utc) + timedelta(days=days)).isoformat()
     link_id = database.execute(
-        "INSERT INTO pledge_links(event_id, pledge_id, token, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
-        (event["id"], pledge["id"], token, actor.get("id"), now(), expires),
+        "INSERT INTO pledge_links(event_id, pledge_id, token_hash, created_by, created_at, expires_at) VALUES (?, ?, ?, ?, ?, ?)",
+        (event["id"], pledge["id"], token_hash(token), actor.get("id"), now(), expires),
     )
     database.audit(event["id"], "pledge_page_created", {"expires_at": expires, "guest_id": pledge.get("guest_id")}, pledge["id"], actor=actor)
-    return database.one("SELECT * FROM pledge_links WHERE id = ?", (link_id,))
+    return database.one("SELECT * FROM pledge_links WHERE id = ?", (link_id,)), token
 
 
 def revoke_links(event_id: str, pledge_id: int, reason: str, actor: dict | None = None) -> None:
@@ -91,8 +85,8 @@ class DeliverRequest(BaseModel):
 async def deliver_pledge_page(event_id: str, pledge_id: int, payload: DeliverRequest, request: Request):
     event, member = auth.require_event(request, event_id, "follow_up")
     pledge, guest = pledge_for_follow_up(event_id, pledge_id)
-    link = ensure_link(event, pledge, member)
-    url = payment_page_url(link["token"])
+    link, token = issue_link(event, pledge, member)
+    url = payment_page_url(token)
     amount = pledge["item"] or money_label(pledge["amount_minor"], pledge["currency"])
     org_name = organisation(event["org_id"]).get("name") or event["organisation"]
     text = message_text(guest_label(guest), event["organisation"] or org_name, event["name"], amount, url)
@@ -294,7 +288,7 @@ async def verify_pledge_payments(event_id: str, pledge_id: int, request: Request
 
 
 def link_by_token(token: str) -> tuple[dict, dict, dict]:
-    link = database.one("SELECT * FROM pledge_links WHERE token = ?", (token,))
+    link = database.one("SELECT * FROM pledge_links WHERE token_hash = ?", (token_hash(token),))
     if not link:
         raise HTTPException(404, "This pledge page was not found.")
     if link["revoked_at"]:

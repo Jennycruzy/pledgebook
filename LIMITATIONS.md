@@ -12,6 +12,10 @@ This is the build status as it stands, not a list of claims.
   all refused on the public deployment (`eval/try_to_break.py`).
 - A real Paystack test-mode checkout was created from a guest pledge page for a
   part payment and opened on `checkout.paystack.com`.
+- Session, invitation and pledge-page tokens are stored only as SHA-256
+  hashes, so a copy of the database cannot open a guest's pledge page. A
+  link is shown once when it is sent; sending again issues a new link and
+  earlier links keep working until they expire or the page is closed.
 - The automated test suite covers access control, roles, lifecycle, guest
   administration, review rules, repeat detection, payment crediting (including
   duplicates and partial payments), webhooks and retention.
@@ -36,9 +40,6 @@ This is the build status as it stands, not a list of claims.
   fragment. This is safe but not hands-off automation. In 7 of the 12 the
   Sync recheck had the right record for the usher to confirm; it corrected no
   line automatically. See `docs/evaluation.md`.
-- **Stored pledge-page links.** Invitation tokens are stored hashed, but
-  private pledge-page tokens are stored as issued, so a copy of the database
-  would expose open pledge pages.
 
 ## By design or by configuration
 

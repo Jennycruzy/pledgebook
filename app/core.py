@@ -193,8 +193,7 @@ def follow_up_view(event_id: str) -> dict:
     )
     current = datetime.now(timezone.utc)
     return {
-        "links": [{"id": link["id"], "pledge_id": link["pledge_id"], "url": payment_page_url(link["token"]),
-                   "expires_at": link["expires_at"], "opened_at": link["opened_at"],
+        "links": [{"id": link["id"], "pledge_id": link["pledge_id"], "expires_at": link["expires_at"], "opened_at": link["opened_at"],
                    "active": not link["revoked_at"] and (parse_time(link["expires_at"]) or current) > current}
                   for link in links],
         "calls": calls, "payments": payments, "deliveries": deliveries,
