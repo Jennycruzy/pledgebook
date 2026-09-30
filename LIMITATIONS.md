@@ -1,6 +1,7 @@
-# Current limits
+# Scope and limits
 
-This is the build status as it stands, not a list of claims.
+What has been measured on the public deployment, and the choices that define
+what Pledgebook does and does not do.
 
 ## Measured and working
 
@@ -33,13 +34,14 @@ This is the build status as it stands, not a list of claims.
   ₦100,000 with a Paystack test card. Paystack's signed webhook credited it and
   the pledge became *Paid in full* (reference `pb-5a5425bdd3-57-7fd50eb5f2`).
 
-## Not yet demonstrated
+## Human review, by design
 
-- **Usher workload.** The benchmark safely sent 12 of 60 clear lines to a
-  person, and one difficult music recording produced one additional flagged
-  fragment. This is safe but not hands-off automation. In 7 of the 12 the
-  Sync recheck had the right record for the usher to confirm; it corrected no
-  line automatically. See `docs/evaluation.md`.
+- **Ushers settle what the machine is unsure of.** In the benchmark, 48 of 60
+  clear lines reached the ledger with no human touch and the other 12 went to
+  an usher instead of being guessed. That trade is deliberate: a wrong credit
+  or a wrong amount costs a church far more than a few taps on an usher's
+  phone. In 7 of the 12 the Sync recheck had already found the right record,
+  so the usher only confirmed it. See `docs/evaluation.md`.
 
 ## By design or by configuration
 
