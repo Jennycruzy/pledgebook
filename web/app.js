@@ -301,7 +301,8 @@ function renderSignup(invite = '', info = null) {
       <label class="field">Password <span class="hint">At least 10 characters</span><input name="password" type="password" minlength="10" autocomplete="new-password" required></label>
       ${info ? '' : '<label class="field">Organisation<input name="organisation" placeholder="St. Luke\'s Parish, Lekki" required></label>'}
       <button class="btn btn-primary btn-lg btn-block" type="submit">Create account ${icon('arrowRight')}</button></form>
-    <p class="switch">Already have an account? <a href="${invite ? `#/invite/${esc(invite)}` : '#/login'}">Sign in</a></p>`);
+    <p class="switch">Already have an account? <a href="${invite ? `#/invite/${esc(invite)}` : '#/login'}">Sign in</a></p>
+    <p class="tiny faint" style="text-align:center;margin-top:10px">To prevent abuse, each network can create 5 accounts an hour. If you see "Too many attempts", wait a few minutes or sign in to an account you already made.</p>`);
   $('signup-form').addEventListener('submit', async (event) => {
     event.preventDefault(); const button = event.target.querySelector('button'); button.disabled = true;
     try {
