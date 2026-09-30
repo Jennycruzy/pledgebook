@@ -29,8 +29,8 @@ Nothing below is mocked. Every result is from the public deployment.
   the ledger with no human touch; the other 12 were sent to an usher rather
   than guessed. ([`docs/evaluation.md`](docs/evaluation.md))
 - **A voice assistant that talks back.** On a guest's private pledge page, the
-  AssemblyAI Voice Agent listens, replies in its own voice, and can be
-  interrupted mid-sentence. It calls real server tools. On 30 September 2026 it
+  AssemblyAI Voice Agent listens to the guest and replies aloud in its
+  own voice. It calls real server tools. On 30 September 2026 it
   refused a caller who said she was someone else, then, in a second session,
   confirmed the real guest and opened checkout.
 - **Speech to money.** That guest paid ₦100,000 through Paystack; the signed
